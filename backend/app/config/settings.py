@@ -1,4 +1,4 @@
-"""Pydantic Settings — LLM、Checkpoint、Store 配置"""
+"""Pydantic Settings — LLM、PostgreSQL、JWT、Store 配置"""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -14,12 +14,13 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = "your-api-key-here"
     LLM_TEMPERATURE: float = 0.7
 
-    # ── Checkpoint ──
-    CHECKPOINT_STORE: str = "memory"
-    CHECKPOINT_DB_PATH: str = "checkpoints.db"
+    # ── PostgreSQL ──
+    POSTGRES_URI: str = "postgresql://travel_user:password@localhost:5432/travel_planner"
 
-    # ── Store ──
-    STORE_TYPE: str = "memory"
+    # ── JWT Auth ──
+    JWT_SECRET_KEY: str = "change-me-in-production"
+    JWT_EXPIRE_HOURS: int = 24
+    JWT_ALGORITHM: str = "HS256"
 
     # ── LangSmith (可选) ──
     LANGSMITH_API_KEY: str = ""
