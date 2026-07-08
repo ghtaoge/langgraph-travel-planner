@@ -10,6 +10,7 @@ from app.config.settings import settings
 from app.core.database import get_db_pool, get_user_by_id
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -57,3 +58,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="用户不存在")
 
     return user
+
+
+async def get_optional_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(optional_security)) -> dict | None:
+    """可选当前用户 — 供匿名找回密码与登录态绑定场景共用"""
+    if credentials is None:
+        return None
+    payload = decode_access_token(credentials.credentials)
+    user_id = payload.get("user_id")
+    if not user_id:
+        return None
+    pool = await get_db_pool()
+    return await get_user_by_id(pool, user_id)

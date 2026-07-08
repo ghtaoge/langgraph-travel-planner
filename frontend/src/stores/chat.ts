@@ -40,6 +40,44 @@ function createThreadState(): ThreadState {
   }
 }
 
+
+function normalizeInterruptNode(node: string, payload?: Record<string, unknown>): string {
+  const interruptType = String(payload?.interrupt_type || '')
+  if (interruptType === 'select' || payload?.plans) return 'user_select'
+  if (interruptType === 'approve' || payload?.budget || payload?.itinerary) return 'user_approve'
+  if (payload?.daily_plans) return 'itinerary_refine'
+  return node || 'unknown'
+}
+
+
+function looksLikeInternalJson(content: string): boolean {
+  const trimmed = content.trim()
+  if (!trimmed) return false
+  if (trimmed.startsWith("{") && (trimmed.includes("\"destination\"") || trimmed.includes("\"plan_id\"") || trimmed.includes("\"total_budget\""))) return true
+  if (trimmed.includes("}{\"plan_id\"") || trimmed.includes("}\{\"plan_id\"")) return true
+  return false
+}
+
+function formatSystemMessage(content: string): string {
+  const prefix = "恢复操作:"
+  if (!content.startsWith(prefix)) return content
+  const raw = content.slice(prefix.length).trim()
+  try {
+    const data = JSON.parse(raw) as Record<string, unknown>
+    if (data.selected_plan_id) return `已选择方案 #${data.selected_plan_id}`
+    if (data.approval_status === "approved") return "已批准行程"
+    if (data.approval_status === "rejected") return `已要求调整：${data.approval_comment || "未填写原因"}`
+  } catch {
+    return "已继续执行"
+  }
+  return "已继续执行"
+}
+
+
+function isUserFacingTokenNode(node: string): boolean {
+  return node === "format_output"
+}
+
 export const useChatStore = defineStore('chat', () => {
   // ── Per-thread state Map ──
   const threadStates = ref<Map<string, ThreadState>>(new Map())
@@ -80,7 +118,7 @@ export const useChatStore = defineStore('chat', () => {
     return !!state && state.messages.length > 0
   }
 
-  function getLastAssistantMessage(tid: string): ChatMessageDB | null {
+  function getLastAssistantMetadata(tid: string): Record<string, unknown> | null {
     const state = threadStates.value.get(tid)
     if (!state) return null
     // 从 DB 加载的 messages 中找最后一条 assistant 消息的 metadata
@@ -88,7 +126,7 @@ export const useChatStore = defineStore('chat', () => {
     for (let i = state.messages.length - 1; i >= 0; i--) {
       const msg = state.messages[i]
       if (msg.role === 'assistant' && msg.meta) {
-        return msg.meta as unknown as ChatMessageDB
+        return msg.meta
       }
     }
     return null
@@ -96,20 +134,23 @@ export const useChatStore = defineStore('chat', () => {
 
   function setMessagesFromDB(tid: string, dbMessages: ChatMessageDB[]) {
     const state = getThreadState(tid)
-    state.messages = dbMessages.map(m => ({
+    const visibleMessages = dbMessages.filter(m => {
+      if (m.role === "assistant" && !m.metadata && looksLikeInternalJson(m.content || "")) return false
+      return true
+    })
+    state.messages = visibleMessages.map(m => ({
       id: m.id,
       role: m.role,
-      content: m.content,
+      content: m.role === "system" ? formatSystemMessage(m.content) : m.content,
       timestamp: new Date(m.created_at).getTime(),
       streaming: false,
       meta: m.metadata as unknown as Record<string, unknown> || undefined,
     }))
-    // 如果有 thinking_content, 合入 meta
-    for (let i = 0; i < dbMessages.length; i++) {
-      if (dbMessages[i].thinking_content) {
+    for (let i = 0; i < visibleMessages.length; i++) {
+      if (visibleMessages[i].thinking_content) {
         state.messages[i].meta = {
           ...state.messages[i].meta,
-          thinking: dbMessages[i].thinking_content,
+          thinking: visibleMessages[i].thinking_content,
         }
       }
     }
@@ -123,7 +164,7 @@ export const useChatStore = defineStore('chat', () => {
     // 构建 InterruptEvent
     state.interruptInfo = {
       type: 'interrupt',
-      node: interruptType || 'unknown',
+      node: normalizeInterruptNode(interruptType || 'unknown', interruptValue),
       question: interruptValue?.question as string || '等待输入',
     }
 
@@ -144,6 +185,7 @@ export const useChatStore = defineStore('chat', () => {
   // ── Actions ──
 
   function sendMessage(query: string) {
+    if (hasInterrupt.value || isLoading.value) return
     const convStore = useConversationsStore()
     // 如果是新对话, 先创建 conversation
     if (convStore.activeThreadId === 'new') {
@@ -153,7 +195,7 @@ export const useChatStore = defineStore('chat', () => {
       threadId.value = convStore.activeThreadId
     }
 
-    const tid = threadId.value || 'temp-new'
+    const tid = threadId.value || convStore.activeThreadId || 'new'
     const state = getThreadState(tid)
 
     const userMsg: ChatMessage = {
@@ -186,7 +228,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function sendResume(resumeData: Record<string, unknown>) {
-    const tid = threadId.value
+    const tid = threadId.value || useConversationsStore().activeThreadId
     const state = getThreadState(tid)
 
     state.isLoading = true
@@ -237,7 +279,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function rollback(checkpointId: string) {
-    const tid = threadId.value
+    const tid = threadId.value || useConversationsStore().activeThreadId
     const state = getThreadState(tid)
     state.interruptInfo = null
     state.isLoading = true
@@ -252,15 +294,23 @@ export const useChatStore = defineStore('chat', () => {
     const graphStore = useGraphStore()
     graphStore.updateFromSSE(event)
 
-    const tid = threadId.value
+    const convStore = useConversationsStore()
+    const tid = threadId.value || convStore.activeThreadId || 'new'
     const state = getThreadState(tid)
 
     switch (event.type) {
       case 'thread_created':
         if (event.thread_id) {
+          if (event.thread_id !== tid) {
+            threadStates.value.set(event.thread_id, state)
+            if (tid === 'new' || tid === 'temp-new') {
+              threadStates.value.delete(tid)
+            }
+          }
           threadId.value = event.thread_id
           // 更新 conversations store 的 activeThreadId
-          useConversationsStore().activeThreadId = event.thread_id
+          convStore.activeThreadId = event.thread_id
+          void convStore.loadConversations()
         }
         break
 
@@ -283,7 +333,7 @@ export const useChatStore = defineStore('chat', () => {
               if (!msg.meta.thinking) msg.meta.thinking = ''
               msg.meta.thinking += event.content
             } else {
-              msg.content += event.content
+              if (isUserFacingTokenNode(event.node)) msg.content += event.content
             }
           }
         }
@@ -300,7 +350,8 @@ export const useChatStore = defineStore('chat', () => {
             } catch { msg.content = event.question }
           }
         }
-        state.interruptInfo = event
+        const parsedInterrupt = parseInterruptQuestion(event.question)
+        state.interruptInfo = { ...event, node: normalizeInterruptNode(event.node, parsedInterrupt || undefined) }
         state.isLoading = false
         tryParseInterruptQuestion(state, event.question)
         break
@@ -327,17 +378,24 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  function tryParseInterruptQuestion(state: ThreadState, question: string) {
+  function parseInterruptQuestion(question: string): Record<string, unknown> | null {
     try {
-      const parsed = JSON.parse(question)
-      if (parsed.question) {
-        state.interruptInfo = { ...state.interruptInfo!, question: parsed.question }
-      }
-      if (parsed.plans) state.plans = parsed.plans
-      if (parsed.itinerary || parsed.budget || parsed.daily_plans) {
-        state.approveData = parsed
-      }
-    } catch { /* question 不是 JSON */ }
+      return JSON.parse(question) as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+
+  function tryParseInterruptQuestion(state: ThreadState, question: string) {
+    const parsed = parseInterruptQuestion(question)
+    if (!parsed) return
+    if (parsed.question) {
+      state.interruptInfo = { ...state.interruptInfo!, question: parsed.question as string }
+    }
+    if (parsed.plans) state.plans = parsed.plans as Plan[]
+    if (parsed.itinerary || parsed.budget || parsed.daily_plans) {
+      state.approveData = parsed
+    }
   }
 
   function handleSSEError(error: Error) {
@@ -391,7 +449,7 @@ export const useChatStore = defineStore('chat', () => {
     hasInterrupt, interruptNode, interruptQuestion,
     sendMessage, sendResume, rollback,
     handleSSEEvent, setThreadId, clearChat, initSSE,
-    hasMessagesForThread, getLastAssistantMessage,
+    hasMessagesForThread, getLastAssistantMetadata,
     setMessagesFromDB, restoreInterruptFromMetadata, clearThreadMessages,
     getThreadState,
   }

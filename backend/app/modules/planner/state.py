@@ -117,7 +117,7 @@ class TravelState(TypedDict):
     research_result: Annotated[dict, merge_dicts]
 
     # ── 方案 ──
-    plans: Annotated[list[dict], operator.add]
+    plans: list[dict]
     selected_plan_id: int
     selected_plan: dict
 

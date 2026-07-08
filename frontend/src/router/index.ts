@@ -5,6 +5,8 @@ import { useAuthStore } from '@/stores/auth'
 import ChatView from '@/views/ChatView.vue'
 import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
+import SettingsView from '@/views/SettingsView.vue'
+import ForgotPasswordView from '@/views/ForgotPasswordView.vue'
 
 const routes = [
   {
@@ -20,6 +22,12 @@ const routes = [
     meta: { requiresAuth: false },
   },
   {
+    path: '/forgot-password',
+    name: 'forgotPassword',
+    component: ForgotPasswordView,
+    meta: { requiresAuth: false },
+  },
+  {
     path: '/chat',
     name: 'chatList',
     redirect: '/chat/new',
@@ -28,6 +36,12 @@ const routes = [
     path: '/chat/:threadId',
     name: 'chatThread',
     component: ChatView,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/settings',
+    name: 'settings',
+    component: SettingsView,
     meta: { requiresAuth: true },
   },
   {
@@ -41,7 +55,7 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
 
   // 需要认证的路由

@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 24
     JWT_ALGORITHM: str = "HS256"
 
+    # ── Account verification ──
+    # phone | email | both. Controls which bound account can be used for password reset.
+    PASSWORD_RESET_CHANNEL: str = "both"
+    VERIFICATION_CODE_EXPIRE_MINUTES: int = 10
+    DEV_RETURN_VERIFICATION_CODE: bool = True
+
     # ── LangSmith (可选) ──
     LANGSMITH_API_KEY: str = ""
     LANGSMITH_PROJECT: str = "langgraph-travel-planner"

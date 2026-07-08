@@ -22,6 +22,18 @@
   color-scheme: dark;
 }
 
+:root[data-theme="light"] {
+  --bg-primary: #f7f8fb;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #eef1f7;
+  --border-color: #d8deea;
+  --text-primary: #172033;
+  --text-secondary: #536076;
+  --text-tertiary: #8590a3;
+  --accent-color: #4f46e5;
+  --accent-color-light: rgba(79, 70, 229, 0.12);
+  color-scheme: light;
+}
 * {
   margin: 0;
   padding: 0;

@@ -54,7 +54,14 @@ export class SSEService {
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        let detail = response.statusText
+        try {
+          const errorBody = await response.json()
+          detail = errorBody.detail || detail
+        } catch {
+          // ignore non-JSON error body
+        }
+        throw new Error(detail || `HTTP ${response.status}`)
       }
 
       const reader = response.body?.getReader()

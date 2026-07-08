@@ -39,3 +39,28 @@ CREATE INDEX IF NOT EXISTS idx_conversations_user_status
   ON conversations(user_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
   ON chat_messages(conversation_id, created_at);
+
+-- User profile fields (idempotent for existing databases)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname VARCHAR(30);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(120);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS theme VARCHAR(20) NOT NULL DEFAULT 'dark';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_unique ON users(phone) WHERE phone IS NOT NULL AND phone <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL AND email <> '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE TABLE IF NOT EXISTS verification_codes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  target_type VARCHAR(10) NOT NULL,
+  target VARCHAR(120) NOT NULL,
+  purpose VARCHAR(30) NOT NULL,
+  code VARCHAR(12) NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  consumed_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_verification_codes_lookup
+  ON verification_codes(target_type, target, purpose, created_at DESC);

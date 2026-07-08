@@ -37,8 +37,10 @@ function handleSend() {
 
 <style scoped>
 .chat-input {
-  padding: 12px 24px;
+  padding: 12px 24px 16px;
   border-top: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  flex-shrink: 0;
 }
 
 .input-row {
@@ -55,8 +57,9 @@ function handleSend() {
   font-size: 14px;
   background: var(--bg-primary);
   color: var(--text-primary);
-  resize: vertical;
-  min-height: 72px;
+  resize: none;
+  min-height: 54px;
+  max-height: 120px;
   line-height: 1.5;
   font-family: inherit;
 }
