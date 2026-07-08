@@ -1,10 +1,11 @@
-/** Chat Store — 管理对话消息、SSE 事件流、interrupt 状态 */
+/** Chat Store — 多对话消息管理 + SSE 事件流 + per-threadId interrupt 状态 */
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { sseService } from '@/services'
 import { useGraphStore } from './graph'
-import type { SSEEvent, Plan, InterruptEvent } from '@/types'
+import { useConversationsStore } from './conversations'
+import type { SSEEvent, Plan, InterruptEvent, ChatMessageDB } from '@/types'
 
 export interface ChatMessage {
   id: string
@@ -15,48 +16,158 @@ export interface ChatMessage {
   meta?: Record<string, unknown>
 }
 
+interface ThreadState {
+  messages: ChatMessage[]
+  interruptInfo: InterruptEvent | null
+  plans: Plan[]
+  approveData: Record<string, unknown> | null
+  streamingMessageId: string | null
+  isLoading: boolean
+  currentNode: string
+  activeNodes: Set<string>
+}
+
+function createThreadState(): ThreadState {
+  return {
+    messages: [],
+    interruptInfo: null,
+    plans: [],
+    approveData: null,
+    streamingMessageId: null,
+    isLoading: false,
+    currentNode: '',
+    activeNodes: new Set(),
+  }
+}
+
 export const useChatStore = defineStore('chat', () => {
-  // ── State ──
-  const messages = ref<ChatMessage[]>([])
+  // ── Per-thread state Map ──
+  const threadStates = ref<Map<string, ThreadState>>(new Map())
   const threadId = ref<string>('')
-  const userId = ref<string>('default_user')
-  const isLoading = ref(false)
-  const currentNode = ref<string>('')
-  const activeNodes = ref<Set<string>>(new Set())
+  const userId = ref<string>('')
 
-  /** interrupt 状态 */
-  const interruptInfo = ref<InterruptEvent | null>(null)
+  // ── 获取当前活跃 thread 的状态 ──
+  const currentThread = computed(() => {
+    const tid = threadId.value || useConversationsStore().activeThreadId
+    if (!threadStates.value.has(tid)) {
+      threadStates.value.set(tid, createThreadState())
+    }
+    return threadStates.value.get(tid)!
+  })
 
-  /** 方案列表 (user_select interrupt 时填充) */
-  const plans = ref<Plan[]>([])
-
-  /** interrupt 结构化数据 (行程/预算等, approve/daily_confirm 时填充) */
-  const approveData = ref<Record<string, unknown> | null>(null)
-
-  /** 当前 token 流拼装的 assistant 消息 ID */
-  let streamingMessageId: string | null = null
-
-  // ── Computed ──
+  const messages = computed(() => currentThread.value?.messages || [])
+  const isLoading = computed(() => currentThread.value?.isLoading || false)
+  const interruptInfo = computed(() => currentThread.value?.interruptInfo || null)
+  const plans = computed(() => currentThread.value?.plans || [])
+  const approveData = computed(() => currentThread.value?.approveData || null)
+  const currentNode = computed(() => currentThread.value?.currentNode || '')
+  const activeNodes = computed(() => currentThread.value?.activeNodes || new Set())
   const hasInterrupt = computed(() => interruptInfo.value !== null)
   const interruptNode = computed(() => interruptInfo.value?.node || '')
   const interruptQuestion = computed(() => interruptInfo.value?.question || '')
 
+  // ── Thread state helpers ──
+
+  function getThreadState(tid: string): ThreadState {
+    if (!threadStates.value.has(tid)) {
+      threadStates.value.set(tid, createThreadState())
+    }
+    return threadStates.value.get(tid)!
+  }
+
+  function hasMessagesForThread(tid: string): boolean {
+    const state = threadStates.value.get(tid)
+    return !!state && state.messages.length > 0
+  }
+
+  function getLastAssistantMessage(tid: string): ChatMessageDB | null {
+    const state = threadStates.value.get(tid)
+    if (!state) return null
+    // 从 DB 加载的 messages 中找最后一条 assistant 消息的 metadata
+    // 注意: ChatMessage 和 ChatMessageDB 不同, metadata 在 meta 字段
+    for (let i = state.messages.length - 1; i >= 0; i--) {
+      const msg = state.messages[i]
+      if (msg.role === 'assistant' && msg.meta) {
+        return msg.meta as unknown as ChatMessageDB
+      }
+    }
+    return null
+  }
+
+  function setMessagesFromDB(tid: string, dbMessages: ChatMessageDB[]) {
+    const state = getThreadState(tid)
+    state.messages = dbMessages.map(m => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      timestamp: new Date(m.created_at).getTime(),
+      streaming: false,
+      meta: m.metadata as unknown as Record<string, unknown> || undefined,
+    }))
+    // 如果有 thinking_content, 合入 meta
+    for (let i = 0; i < dbMessages.length; i++) {
+      if (dbMessages[i].thinking_content) {
+        state.messages[i].meta = {
+          ...state.messages[i].meta,
+          thinking: dbMessages[i].thinking_content,
+        }
+      }
+    }
+  }
+
+  function restoreInterruptFromMetadata(tid: string, metadata: Record<string, unknown>) {
+    const state = getThreadState(tid)
+    const interruptType = metadata.interrupt_type as string
+    const interruptValue = metadata.interrupt_value as Record<string, unknown> | undefined
+
+    // 构建 InterruptEvent
+    state.interruptInfo = {
+      type: 'interrupt',
+      node: interruptType || 'unknown',
+      question: interruptValue?.question as string || '等待输入',
+    }
+
+    // 恢复 plans 或 approveData
+    if (interruptValue?.plans) {
+      state.plans = interruptValue.plans as Plan[]
+    }
+    if (interruptValue?.itinerary || interruptValue?.budget || interruptValue?.daily_plans) {
+      state.approveData = interruptValue as Record<string, unknown>
+    }
+    state.isLoading = false
+  }
+
+  function clearThreadMessages(tid: string) {
+    threadStates.value.delete(tid)
+  }
+
   // ── Actions ──
 
-  /** 发送用户消息并启动 SSE 流 */
   function sendMessage(query: string) {
+    const convStore = useConversationsStore()
+    // 如果是新对话, 先创建 conversation
+    if (convStore.activeThreadId === 'new') {
+      // SSE 流中后端会创建 conversation + 返回 thread_id
+      threadId.value = ''  // 让后端生成
+    } else {
+      threadId.value = convStore.activeThreadId
+    }
+
+    const tid = threadId.value || 'temp-new'
+    const state = getThreadState(tid)
+
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
       content: query,
       timestamp: Date.now(),
     }
-    messages.value.push(userMsg)
+    state.messages.push(userMsg)
 
-    interruptInfo.value = null
-    plans.value = []
-    approveData.value = null
-    isLoading.value = true
+    state.interruptInfo = null
+    state.plans = []
+    state.approveData = null
+    state.isLoading = true
 
     const assistantMsg: ChatMessage = {
       id: `assistant-${Date.now()}`,
@@ -65,79 +176,44 @@ export const useChatStore = defineStore('chat', () => {
       timestamp: Date.now(),
       streaming: true,
     }
-    messages.value.push(assistantMsg)
-    streamingMessageId = assistantMsg.id
+    state.messages.push(assistantMsg)
+    state.streamingMessageId = assistantMsg.id
 
-    // 使用 vite proxy 相对路径 (走 /api → localhost:8001 代理, 避免 CORS)
     sseService.postStream('/api/travel/stream', {
       query,
-      user_id: userId.value,
-      thread_id: threadId.value,
+      thread_id: threadId.value || '',
     })
   }
 
-  /** 恢复 interrupt — 发送 resume_data */
   function sendResume(resumeData: Record<string, unknown>) {
-    isLoading.value = true
+    const tid = threadId.value
+    const state = getThreadState(tid)
 
-    // ── 先保存选中方案详情，再清除 interrupt 状态 ──
+    state.isLoading = true
+
+    // 处理选中方案详情
     let selectedPlan: Plan | undefined = undefined
     if (resumeData.selected_plan_id) {
-      selectedPlan = plans.value.find(p => p.plan_id === Number(resumeData.selected_plan_id))
+      selectedPlan = state.plans.find(p => p.plan_id === Number(resumeData.selected_plan_id))
     }
 
-    interruptInfo.value = null
-    plans.value = []
-    approveData.value = null
+    state.interruptInfo = null
+    state.plans = []
+    state.approveData = null
 
-    // 添加用户操作消息 (选择方案/批准/拒绝)
+    // 添加用户操作消息
     let actionText = ''
     if (resumeData.selected_plan_id) {
       actionText = selectedPlan
         ? `选择了方案 #${selectedPlan.plan_id}: ${selectedPlan.title} (${selectedPlan.style})`
         : `选择了方案 #${resumeData.selected_plan_id}`
-      // 将选中方案的详情写入系统消息，便于追溯
-      if (selectedPlan) {
-        messages.value.push({
-          id: `system-${Date.now()}`,
-          role: 'system',
-          content: `📋 ${selectedPlan.title}\n风格: ${selectedPlan.style} | 预估预算: ${selectedPlan.estimated_budget || '待计算'}\n亮点:\n${(selectedPlan.highlights || []).map(h => `  • ${h}`).join('\n')}\n概览:\n${(selectedPlan.daily_overview || []).map((d: string, i: number) => `  Day${i+1}: ${d}`).join('\n')}`,
-          timestamp: Date.now(),
-        })
-      }
     } else if (resumeData.approval_status === 'approved') {
       actionText = '✅ 批准了行程方案'
-      // 批准时也保存行程详情便于追溯
-      if (approveData.value) {
-        const d = approveData.value as Record<string, unknown>
-        const itinerary = d.itinerary as Record<string, unknown> | undefined
-        const dailyPlans = (d.daily_plans || (itinerary?.daily_plans)) as Record<string, unknown>[] | undefined
-        const budget = d.budget as Record<string, unknown> | undefined
-        if (itinerary || dailyPlans) {
-          const dest = itinerary?.destination || d.selected_plan || '旅行'
-          const duration = itinerary?.duration || (dailyPlans?.length || 0)
-          const budgetStr = budget?.total_budget ? ` | 预算: ${budget.total_budget}元` : ''
-          let detail = `✅ 已批准: ${dest} (${duration}天)${budgetStr}\n`
-          if (dailyPlans && dailyPlans.length > 0) {
-            detail += dailyPlans.map((dp: Record<string, unknown>, i: number) => {
-              const acts = (dp.activities as Record<string, unknown>[] || []).map(a => `  • ${(a as any).name}${(a as any).cost ? ` (${(a as any).cost}元)` : ''}`)
-              return `Day${i+1}: ${acts.join('\n')}${dp.hotel_name ? `\n  🏨 ${dp.hotel_name}` : ''}${dp.transport ? `\n  🚗 ${dp.transport}` : ''}`
-            }).join('\n')
-          }
-          messages.value.push({
-            id: `system-${Date.now() + 1}`,
-            role: 'system',
-            content: detail,
-            timestamp: Date.now(),
-          })
-        }
-      }
     } else if (resumeData.approval_status === 'rejected') {
       actionText = `❌ 需修改: ${resumeData.approval_comment || '需要调整'}`
     }
 
-    // 用户操作记录
-    messages.value.push({
+    state.messages.push({
       id: `user-${Date.now()}`,
       role: 'user',
       content: actionText,
@@ -151,62 +227,62 @@ export const useChatStore = defineStore('chat', () => {
       timestamp: Date.now(),
       streaming: true,
     }
-    messages.value.push(assistantMsg)
-    streamingMessageId = assistantMsg.id
+    state.messages.push(assistantMsg)
+    state.streamingMessageId = assistantMsg.id
 
-    // 使用 vite proxy 相对路径
     sseService.postStream('/api/travel/resume', {
-      thread_id: threadId.value,
+      thread_id: tid,
       resume_data: resumeData,
     })
   }
 
-  /** 回退到指定 checkpoint */
   function rollback(checkpointId: string) {
-    interruptInfo.value = null
-    isLoading.value = true
+    const tid = threadId.value
+    const state = getThreadState(tid)
+    state.interruptInfo = null
+    state.isLoading = true
 
-    // 使用 vite proxy 相对路径
     sseService.postStream('/api/travel/rollback', {
-      thread_id: threadId.value,
+      thread_id: tid,
       checkpoint_id: checkpointId,
     })
   }
 
-  /** 处理 SSE 事件 */
   function handleSSEEvent(event: SSEEvent) {
     const graphStore = useGraphStore()
     graphStore.updateFromSSE(event)
 
+    const tid = threadId.value
+    const state = getThreadState(tid)
+
     switch (event.type) {
       case 'thread_created':
-        // 保存后端生成的 thread_id, 用于 resume/rollback
         if (event.thread_id) {
           threadId.value = event.thread_id
+          // 更新 conversations store 的 activeThreadId
+          useConversationsStore().activeThreadId = event.thread_id
         }
         break
 
       case 'node_start':
-        currentNode.value = event.node
-        activeNodes.value.add(event.node)
+        state.currentNode = event.node
+        state.activeNodes.add(event.node)
         break
 
       case 'node_end':
-        activeNodes.value.delete(event.node)
-        currentNode.value = ''
+        state.activeNodes.delete(event.node)
+        state.currentNode = ''
         break
 
       case 'token':
-        if (streamingMessageId) {
-          const msg = messages.value.find(m => m.id === streamingMessageId)
+        if (state.streamingMessageId) {
+          const msg = state.messages.find(m => m.id === state.streamingMessageId)
           if (msg) {
             if (event.token_type === 'thinking') {
-              // DeepSeek 思考 token — 存入 meta.thinking
               if (!msg.meta) msg.meta = {}
               if (!msg.meta.thinking) msg.meta.thinking = ''
               msg.meta.thinking += event.content
             } else {
-              // 正常输出 token — 逐字追加
               msg.content += event.content
             }
           }
@@ -214,93 +290,61 @@ export const useChatStore = defineStore('chat', () => {
         break
 
       case 'interrupt':
-        if (streamingMessageId) {
-          const msg = messages.value.find(m => m.id === streamingMessageId)
+        if (state.streamingMessageId) {
+          const msg = state.messages.find(m => m.id === state.streamingMessageId)
           if (msg) {
             msg.streaming = false
-            // 给 assistant 消息添加 interrupt 描述
             try {
               const parsed = JSON.parse(event.question)
-              if (parsed.question) {
-                msg.content = parsed.question
-              }
-            } catch {
-              msg.content = event.question
-            }
+              if (parsed.question) msg.content = parsed.question
+            } catch { msg.content = event.question }
           }
         }
-        interruptInfo.value = event
-        isLoading.value = false
-
-        // 尝试从 JSON question 中提取友好文本和结构化数据
-        tryParseInterruptQuestion(event.question)
-
+        state.interruptInfo = event
+        state.isLoading = false
+        tryParseInterruptQuestion(state, event.question)
         break
 
       case 'custom':
         break
 
       case 'completed':
-        if (streamingMessageId) {
-          const msg = messages.value.find(m => m.id === streamingMessageId)
+        if (state.streamingMessageId) {
+          const msg = state.messages.find(m => m.id === state.streamingMessageId)
           if (msg) {
             msg.streaming = false
-            // 如果有最终行程, 写入消息内容
-            if (event.data?.final_plan) {
-              msg.content = event.data.final_plan
-            }
+            if (event.data?.final_plan) msg.content = event.data.final_plan
           }
         }
-        // 如果没有 streamingMessageId, 创建一条系统消息
-        if (!streamingMessageId && event.data?.final_plan) {
-          messages.value.push({
-            id: `system-${Date.now()}`,
-            role: 'system',
-            content: event.data.final_plan,
-            timestamp: Date.now(),
-          })
-        }
-        streamingMessageId = null
-        isLoading.value = false
-        activeNodes.value.clear()
-        currentNode.value = ''
+        state.streamingMessageId = null
+        state.isLoading = false
+        state.activeNodes.clear()
+        state.currentNode = ''
         break
 
       case 'graph_topology':
-        // 已在上面由 graphStore 处理
         break
     }
   }
 
-  /** 从 interrupt question 中解析 JSON — 提取友好文本 + 方案/行程等结构化数据 */
-  function tryParseInterruptQuestion(question: string) {
+  function tryParseInterruptQuestion(state: ThreadState, question: string) {
     try {
       const parsed = JSON.parse(question)
-      // 提取友好问题文本
       if (parsed.question) {
-        interruptInfo.value = {
-          ...interruptInfo.value!,
-          question: parsed.question,
-        }
+        state.interruptInfo = { ...state.interruptInfo!, question: parsed.question }
       }
-      // user_select: 提取方案列表
-      if (parsed.plans) {
-        plans.value = parsed.plans
-      }
-      // user_approve / daily_confirm: 保存完整结构化数据供 UI 渲染
+      if (parsed.plans) state.plans = parsed.plans
       if (parsed.itinerary || parsed.budget || parsed.daily_plans) {
-        approveData.value = parsed
+        state.approveData = parsed
       }
-    } catch {
-      // question 不是 JSON, 保持原始字符串作为显示文本
-    }
+    } catch { /* question 不是 JSON */ }
   }
 
-  /** SSE 错误处理 */
   function handleSSEError(error: Error) {
-    isLoading.value = false
-    if (streamingMessageId) {
-      const msg = messages.value.find(m => m.id === streamingMessageId)
+    const state = currentThread.value
+    state.isLoading = false
+    if (state.streamingMessageId) {
+      const msg = state.messages.find(m => m.id === state.streamingMessageId)
       if (msg) {
         msg.streaming = false
         msg.content += `\n[错误: ${error.message}]`
@@ -308,12 +352,10 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** SSE 完成 */
   function handleSSEComplete() {
-    isLoading.value = false
+    currentThread.value.isLoading = false
   }
 
-  /** 初始化 SSE 事件处理器 */
   function initSSE() {
     sseService.setHandlers(handleSSEEvent, handleSSEError, handleSSEComplete)
   }
@@ -323,38 +365,34 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function clearChat() {
-    messages.value = []
+    const tid = threadId.value
+    if (tid) {
+      const state = threadStates.value.get(tid)
+      if (state) {
+        state.messages = []
+        state.interruptInfo = null
+        state.plans = []
+        state.approveData = null
+        state.isLoading = false
+        state.streamingMessageId = null
+        state.activeNodes.clear()
+        state.currentNode = ''
+      }
+    }
     threadId.value = ''
-    interruptInfo.value = null
-    plans.value = []
-    approveData.value = null
-    isLoading.value = false
-    streamingMessageId = null
-    activeNodes.value.clear()
-    currentNode.value = ''
   }
 
   initSSE()
 
   return {
-    messages,
-    threadId,
-    userId,
-    isLoading,
-    currentNode,
-    activeNodes,
-    interruptInfo,
-    plans,
-    approveData,
-    hasInterrupt,
-    interruptNode,
-    interruptQuestion,
-    sendMessage,
-    sendResume,
-    rollback,
-    handleSSEEvent,
-    setThreadId,
-    clearChat,
-    initSSE,
+    threadStates, threadId, userId,
+    messages, isLoading, interruptInfo, plans, approveData,
+    currentNode, activeNodes,
+    hasInterrupt, interruptNode, interruptQuestion,
+    sendMessage, sendResume, rollback,
+    handleSSEEvent, setThreadId, clearChat, initSSE,
+    hasMessagesForThread, getLastAssistantMessage,
+    setMessagesFromDB, restoreInterruptFromMetadata, clearThreadMessages,
+    getThreadState,
   }
 })

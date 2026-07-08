@@ -1,3 +1,4 @@
 export { useChatStore } from './chat'
 export { useGraphStore } from './graph'
-export { useHistoryStore } from './history'
+export { useAuthStore } from './auth'
+export { useConversationsStore } from './conversations'

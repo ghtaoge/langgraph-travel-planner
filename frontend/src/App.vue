@@ -1,53 +1,90 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
-import { useChatStore } from '@/stores'
-import ChatInput from '@/components/ChatInput.vue'
-import MessageList from '@/components/MessageList.vue'
-import PlanSelector from '@/components/PlanSelector.vue'
-import ApprovalDialog from '@/components/ApprovalDialog.vue'
-import GraphTopology from '@/components/GraphTopology.vue'
-import ProgressPanel from '@/components/ProgressPanel.vue'
-import RollbackTimeline from '@/components/RollbackTimeline.vue'
-import HistoryPanel from '@/components/HistoryPanel.vue'
-import TraceLink from '@/components/TraceLink.vue'
+import { onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore, useConversationsStore } from '@/stores'
 
-const chatStore = useChatStore()
+const router = useRouter()
+const authStore = useAuthStore()
+const convStore = useConversationsStore()
 
-onMounted(() => {
-  chatStore.initSSE()
+onMounted(async () => {
+  if (authStore.isLoggedIn) {
+    await convStore.loadConversations()
+  }
 })
+
+function timeAgo(dateStr: string): string {
+  const now = Date.now()
+  const then = new Date(dateStr).getTime()
+  const diff = Math.floor((now - then) / 1000)
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
+  return `${Math.floor(diff / 86400)}天前`
+}
+
+function statusIcon(status: string): string {
+  if (status === 'active') return '🔵'
+  if (status === 'interrupted') return '🟡'
+  return '⚪'
+}
+
+function statusText(status: string): string {
+  if (status === 'active') return '处理中'
+  if (status === 'interrupted') return '等待输入'
+  return '已完成'
+}
+
+async function selectConversation(threadId: string) {
+  router.push(`/chat/${threadId}`)
+}
+
+async function newChat() {
+  convStore.startNewChat()
+  router.push('/chat/new')
+}
+
+function logout() {
+  authStore.logout()
+  router.push('/login')
+}
 </script>
 
 <template>
   <div class="app-layout">
-    <!-- 左侧: 拓扑图 + 进度 + 历史 + 回退 -->
+    <!-- 左侧: DeepSeek 风格对话列表 -->
     <aside class="sidebar">
-      <HistoryPanel />
-      <GraphTopology />
-      <ProgressPanel />
-      <RollbackTimeline />
+      <div class="sidebar-header">
+        <h2>🌍 旅游规划</h2>
+        <button class="new-btn" @click="newChat">+ 新对话</button>
+      </div>
+
+      <div class="conversation-list">
+        <div
+          v-for="conv in convStore.conversations"
+          :key="conv.id"
+          :class="['conv-item', { active: conv.id === convStore.activeThreadId }]"
+          @click="selectConversation(conv.id)"
+        >
+          <span class="conv-status">{{ statusIcon(conv.status) }}</span>
+          <div class="conv-info">
+            <div class="conv-title">{{ conv.title }}</div>
+            <div class="conv-meta">{{ timeAgo(conv.updated_at || conv.created_at) }} · {{ statusText(conv.status) }}</div>
+          </div>
+        </div>
+      </div>
+
       <div class="sidebar-footer">
-        <TraceLink />
+        <div class="user-info">
+          <span>{{ authStore.username }}</span>
+          <button class="logout-btn" @click="logout">退出</button>
+        </div>
       </div>
     </aside>
 
-    <!-- 右侧: 聊天区 -->
-    <main class="chat-area">
-      <div class="chat-header">
-        <h1>🌍 LangGraph 旅游规划助手</h1>
-        <span class="badge">26 知识点全覆盖</span>
-        <span v-if="chatStore.isLoading" class="status-badge loading">处理中</span>
-        <span v-if="chatStore.hasInterrupt" class="status-badge interrupted">等待输入</span>
-      </div>
-
-      <MessageList />
-
-      <!-- interrupt 交互区域 -->
-      <PlanSelector />
-      <ApprovalDialog />
-
-      <!-- 正常输入 -->
-      <ChatInput />
+    <!-- 右侧: 路由视图 -->
+    <main class="main-area">
+      <router-view />
     </main>
   </div>
 </template>
@@ -60,65 +97,73 @@ onMounted(() => {
 }
 
 .sidebar {
-  width: var(--sidebar-width);
+  width: 280px;
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
-  overflow-y: auto;
 }
 
-.sidebar-footer {
+.sidebar-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sidebar-header h2 { font-size: 16px; color: var(--text-primary); font-weight: 600; }
+
+.new-btn {
+  padding: 6px 14px; background: var(--accent-color); color: white;
+  border: none; border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+
+.conversation-list {
+  flex: 1;
+  overflow-y: auto;
   padding: 8px;
+}
+
+.conv-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+  margin-bottom: 4px;
+}
+
+.conv-item:hover { background: var(--bg-tertiary); }
+.conv-item.active { background: var(--accent-color-light); border: 1px solid rgba(99,102,241,0.3); }
+
+.conv-status { font-size: 14px; flex-shrink: 0; }
+.conv-info { flex: 1; min-width: 0; }
+.conv-title { font-size: 14px; color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-meta { font-size: 12px; color: var(--text-tertiary); margin-top: 2px; }
+
+.sidebar-footer {
+  padding: 12px 16px;
   border-top: 1px solid var(--border-color);
 }
 
-.chat-area {
+.user-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.logout-btn {
+  padding: 4px 10px; background: transparent; color: var(--text-tertiary);
+  border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+
+.main-area {
   flex: 1;
   display: flex;
   flex-direction: column;
-}
-
-.chat-header {
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.chat-header h1 {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.badge {
-  font-size: 12px;
-  background: var(--accent-color);
-  color: white;
-  padding: 2px 8px;
-  border-radius: 8px;
-}
-
-.status-badge {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 8px;
-}
-
-.status-badge.loading {
-  background: var(--accent-color-light);
-  color: var(--accent-color);
-  animation: pulse 1.5s infinite;
-}
-
-.status-badge.interrupted {
-  background: #fef3c7;
-  color: #f59e0b;
-}
-
-@keyframes pulse {
-  50% { opacity: 0.5; }
 }
 </style>
