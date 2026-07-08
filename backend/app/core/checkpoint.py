@@ -1,35 +1,36 @@
-"""Checkpoint 配置 — 支持 Memory/SQLite 两种持久化"""
+"""Checkpoint 配置 — PostgreSQL 持久化 (AsyncPostgresSaver)
 
-import sqlite3
+从 MemorySaver 切换到 AsyncPostgresSaver:
+- 服务重启后 checkpoint 数据不丢失
+- 连接池由 psycopg 管理
+- 必须在 FastAPI lifespan 中初始化 (async with)
+"""
 
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app.config.settings import settings
 
+_saver: AsyncPostgresSaver | None = None
 
-def get_checkpointer(store: str | None = None, db_path: str | None = None):
-    """获取 Checkpointer 实例
 
-    Args:
-        store: 存储类型 "memory"/"sqlite", 默认从 Settings 读取
-        db_path: SQLite 数据库路径, 默认从 Settings 读取
+async def get_checkpointer() -> AsyncPostgresSaver:
+    """获取 AsyncPostgresSaver 实例 — lifespan 中初始化"""
+    if _saver is None:
+        _saver = AsyncPostgresSaver.from_conn_string(settings.POSTGRES_URI)
+        await _saver.setup()
+    return _saver
 
-    Returns:
-        MemorySaver 或 SqliteSaver 实例
-    """
-    store = store or settings.CHECKPOINT_STORE
 
-    if store == "sqlite":
-        path = db_path or settings.CHECKPOINT_DB_PATH
-        conn = sqlite3.connect(path, check_same_thread=False)
-        saver = SqliteSaver(conn)
-        try:
-            saver.setup()
-        except Exception:
-            pass
-        return saver
-    elif store == "memory":
-        return MemorySaver()
-    else:
-        raise ValueError(f"不支持的 checkpoint 存储: {store}")
+async def init_checkpointer():
+    """初始化 checkpointer — 在 lifespan startup 中调用"""
+    global _saver
+    _saver = AsyncPostgresSaver.from_conn_string(settings.POSTGRES_URI)
+    await _saver.setup()
+
+
+async def close_checkpointer():
+    """清理 checkpointer — 在 lifespan shutdown 中调用"""
+    # AsyncPostgresSaver 使用 from_conn_string 内部管理连接池
+    # 不需要显式关闭
+    global _saver
+    _saver = None

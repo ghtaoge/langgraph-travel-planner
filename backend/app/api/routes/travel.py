@@ -1,43 +1,51 @@
-"""旅游规划 API 路由 — SSE stream + resume + rollback"""
+"""旅游规划 API 路由 — SSE stream + resume + rollback (带认证 + DB 写入)"""
 
 import json
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from app.api.schemas import ResumeRequest, RollbackRequest, TravelStreamRequest
+from app.core.auth import get_current_user
+from app.core.database import get_db_pool, create_conversation, insert_message, update_conversation_status, update_conversation_title
 from app.core.streaming import stream_graph_execution
 from app.modules.planner.graph import build_travel_planner_graph
 
 router = APIRouter(prefix="/api/travel", tags=["旅游规划"])
 
-_graph_instance = None
 
-
-def get_graph():
-    """获取主图实例 (带 checkpointer + store)"""
-    global _graph_instance
-    if _graph_instance is None:
-        _graph_instance = build_travel_planner_graph()
-    return _graph_instance
+async def get_graph():
+    """获取主图实例 (async, PG-backed)"""
+    return await build_travel_planner_graph()
 
 
 @router.post("/stream")
-async def travel_stream(request: TravelStreamRequest):
-    """SSE 流式执行新对话"""
-    graph = get_graph()
+async def travel_stream(
+    request: TravelStreamRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """SSE 流式执行新对话 — 带认证"""
+    graph = await get_graph()
+    pool = await get_db_pool()
     thread_id = request.thread_id or str(uuid.uuid4())
+
+    # 创建对话记录
+    await create_conversation(pool, current_user["id"], thread_id)
+
+    # 写入 user 消息到 DB
+    await insert_message(pool, thread_id, "user", request.query)
+
     config = {
         "configurable": {"thread_id": thread_id},
-        "context": {"user_id": request.user_id},
+        "context": {"user_id": current_user["id"]},
     }
 
     input_data = {
         "query": request.query,
-        "user_id": request.user_id,
+        "user_id": current_user["id"],
         "thread_id": thread_id,
         "messages": [HumanMessage(content=request.query)],
         "plans": [],
@@ -48,44 +56,51 @@ async def travel_stream(request: TravelStreamRequest):
     }
 
     async def event_generator():
-        # 1. 发送 thread_id (前端需要保存此 ID 用于 resume/rollback)
         yield f"data: {json.dumps({'type': 'thread_created', 'thread_id': thread_id})}\n\n"
 
-        # 2. 发送图拓扑
         from app.api.routes.topology import get_topology
         topo = await get_topology()
         yield f"data: {json.dumps({'type': 'graph_topology', **topo})}\n\n"
 
-        # 3. 流式执行
-        async for event_json in stream_graph_execution(graph, input_data, config):
+        async for event_json in stream_graph_execution(graph, input_data, config, pool, thread_id):
             yield f"data: {event_json}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post("/resume")
-async def travel_resume(request: ResumeRequest):
+async def travel_resume(
+    request: ResumeRequest,
+    current_user: dict = Depends(get_current_user),
+):
     """恢复 interrupt — SSE 流式继续"""
-    graph = get_graph()
-    config = {"configurable": {"thread_id": request.thread_id}}
+    graph = await get_graph()
+    pool = await get_db_pool()
 
+    # 写入 resume 操作消息到 DB
+    await insert_message(pool, request.thread_id, "system", f"恢复操作: {json.dumps(request.resume_data, ensure_ascii=False)[:200]}")
+
+    config = {"configurable": {"thread_id": request.thread_id}}
     resume_command = Command(resume=request.resume_data)
 
     async def event_generator():
-        # 1. 发送 thread_id
         yield f"data: {json.dumps({'type': 'thread_created', 'thread_id': request.thread_id})}\n\n"
 
-        # 2. 流式执行
-        async for event_json in stream_graph_execution(graph, resume_command, config):
+        async for event_json in stream_graph_execution(graph, resume_command, config, pool, request.thread_id):
             yield f"data: {event_json}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post("/rollback")
-async def travel_rollback(request: RollbackRequest):
+async def travel_rollback(
+    request: RollbackRequest,
+    current_user: dict = Depends(get_current_user),
+):
     """回退到指定 checkpoint — SSE 流式重新执行"""
-    graph = get_graph()
+    graph = await get_graph()
+    pool = await get_db_pool()
+
     config = {
         "configurable": {
             "thread_id": request.thread_id,
@@ -94,7 +109,7 @@ async def travel_rollback(request: RollbackRequest):
     }
 
     async def event_generator():
-        async for event_json in stream_graph_execution(graph, None, config):
+        async for event_json in stream_graph_execution(graph, None, config, pool, request.thread_id):
             yield f"data: {event_json}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

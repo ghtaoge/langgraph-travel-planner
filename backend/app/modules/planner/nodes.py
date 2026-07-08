@@ -21,6 +21,15 @@ from app.modules.planner.state import BudgetResult, IntentResult, Plan, TravelSt
 
 logger = logging.getLogger("langgraph-travel-planner.planner")
 
+# Database pool reference — set during lifespan
+_db_pool = None
+
+
+def set_db_pool(pool):
+    """设置数据库连接池引用 — lifespan 中调用"""
+    global _db_pool
+    _db_pool = pool
+
 
 def stream_llm(llm, messages, node_name: str) -> str:
     """流式调用 LLM — 逐 token 通过 get_stream_writer() 推送 SSE, 返回完整响应内容

@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field
 class TravelStreamRequest(BaseModel):
     """SSE 流式执行请求"""
     query: str = Field(..., description="用户旅行需求", min_length=1)
-    user_id: str = Field(default="default_user", description="用户ID")
     thread_id: str = Field(default="", description="对话ID (空则自动生成)")
+    # user_id removed — comes from JWT auth via Depends(get_current_user)
 
 
 class ResumeRequest(BaseModel):
