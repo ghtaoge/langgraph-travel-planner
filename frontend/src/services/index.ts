@@ -1,9 +1,2 @@
 export { sseService, SSEService } from './sse'
-export {
-  default as api,
-  getTopology,
-  getHistory,
-  getProfile,
-  getConversation,
-  getStates,
-} from './api'
+export { default as api, authApi, conversationsApi, messagesApi, getTopology, getHistory, getProfile } from './api'

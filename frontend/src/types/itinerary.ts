@@ -78,3 +78,31 @@ export interface CheckpointState {
   timestamp: string
   metadata: Record<string, unknown>
 }
+
+/** 对话 (来自 PG conversations 表) */
+export interface Conversation {
+  id: string          // = thread_id
+  user_id: string
+  title: string
+  status: 'active' | 'completed' | 'interrupted'
+  created_at: string
+  updated_at: string
+}
+
+/** DB 消息 (来自 PG chat_messages 表, 含完整 metadata) */
+export interface ChatMessageDB {
+  id: string
+  conversation_id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  thinking_content: string | null
+  metadata: {
+    interrupt_type?: string
+    interrupt_value?: Record<string, unknown>
+    plans?: Plan[]
+    itinerary?: Record<string, unknown>
+    budget?: Record<string, unknown>
+    daily_plans?: Record<string, unknown>[]
+  } | null
+  created_at: string
+}

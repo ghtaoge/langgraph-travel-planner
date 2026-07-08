@@ -36,10 +36,19 @@ export class SSEService {
   async postStream(url: string, body: Record<string, unknown>): Promise<void> {
     this.controller = new AbortController()
 
+    // JWT 认证头
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    const token = localStorage.getItem('jwt_token')
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
         signal: this.controller.signal,
       })
