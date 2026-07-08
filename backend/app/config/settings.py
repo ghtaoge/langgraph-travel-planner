@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = 0.7
 
     # ── PostgreSQL ──
-    POSTGRES_URI: str = "postgresql://travel_user:password@localhost:5432/travel_planner"
+    POSTGRES_URI: str = "postgresql://postgres:123456@172.16.28.172:5432/WxMajor"
 
     # ── JWT Auth ──
     JWT_SECRET_KEY: str = "change-me-in-production"
