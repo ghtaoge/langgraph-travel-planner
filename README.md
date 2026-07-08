@@ -23,7 +23,7 @@
 ```
 ┌──────────────┐     SSE      ┌──────────────┐    asyncpg     ┌──────────────┐
 │   Vue 3 SPA  │◄──────────► │   FastAPI     │◄──────────►  │  PostgreSQL   │
-│  (Pinia+Router)│  /api/travel │  (LangGraph)  │              │   (WxMajor)   │
+│  (Pinia+Router)│  /api/travel │  (LangGraph)  │              │   (16)        │
 │              │              │              │◄──────────►  │              │
 │  ┌─────────┐ │              │  ┌─────────┐ │  psycopg v3   │  ┌─────────┐ │
 │  │AuthStore│ │  Authorization│  │JWT Auth │ │              │  │AsyncPG   │ │
@@ -124,7 +124,7 @@ langgraph-travel-planner/
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/Gooeto/langgraph-travel-planner.git
+git clone https://github.com/ghtaoge/langgraph-travel-planner.git
 cd langgraph-travel-planner
 
 # 2. 配置环境变量
@@ -283,4 +283,4 @@ interrupt 信息存储在 `chat_messages.metadata` (JSONB)：
 
 ## License
 
-MIT License — Copyright (c) 2026 Gooeto
+MIT License — Copyright (c) 2026 ghtaoge
