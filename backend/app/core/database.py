@@ -18,6 +18,7 @@ _pool: Optional[asyncpg.Pool] = None
 
 async def get_db_pool() -> asyncpg.Pool:
     """获取全局连接池 — 在 FastAPI lifespan 中初始化"""
+    global _pool
     if _pool is None:
         _pool = await asyncpg.create_pool(
             settings.POSTGRES_URI,
@@ -29,6 +30,7 @@ async def get_db_pool() -> asyncpg.Pool:
 
 async def close_db_pool():
     """关闭连接池 — 在 FastAPI lifespan shutdown 中调用"""
+    global _pool
     if _pool:
         await _pool.close()
         _pool = None
