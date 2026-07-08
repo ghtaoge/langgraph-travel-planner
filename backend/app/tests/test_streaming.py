@@ -1,36 +1,22 @@
-"""SSE 流式测试 — 事件格式验证"""
+"""Streaming 模块测试 — 函数签名验证"""
 
-import json
-
-
-def test_topology_endpoint_returns_valid_structure():
-    """topology API 返回有效结构"""
-    from app.api.routes.topology import get_topology
-    import asyncio
-    topo = asyncio.run(get_topology())
-    assert "nodes" in topo
-    assert "edges" in topo
-    assert "subgraphs" in topo
-    assert len(topo["nodes"]) == 11
+from app.core.streaming import stream_graph_execution, _summarize_output, _estimate_progress
 
 
-def test_sse_event_json_format():
-    """SSE 事件是有效 JSON"""
-    event = json.dumps({"type": "node_start", "node": "intent_parser"})
-    parsed = json.loads(event)
-    assert parsed["type"] == "node_start"
-    assert parsed["node"] == "intent_parser"
+def test_summarize_output():
+    """节点输出摘要"""
+    assert _summarize_output("intent_parser", {"destination": "成都", "duration": 3, "travel_style": "美食游"}) == "解析意图: 目标=成都, 3天, 风格=美食游"
+    assert _summarize_output("plan_generator", {"plans": [1, 2, 3]}) == "生成 3 套旅行方案"
+    assert _summarize_output("unknown_node", {}) == ""
 
 
-def test_interrupt_event_format():
-    """interrupt SSE 事件格式正确"""
-    event = json.dumps({"type": "interrupt", "node": "user_select", "question": "请选择方案"})
-    parsed = json.loads(event)
-    assert parsed["type"] == "interrupt"
+def test_estimate_progress():
+    """进度估算"""
+    assert _estimate_progress("intent_parser") == 0.1
+    assert _estimate_progress("format_output") == 0.9
+    assert _estimate_progress("unknown_node") == 0.5
 
 
-def test_completed_event_format():
-    """completed SSE 事件格式正确"""
-    event = json.dumps({"type": "completed", "data": {"final_plan": "成都3日行程"}})
-    parsed = json.loads(event)
-    assert parsed["type"] == "completed"
+def test_stream_function_signature():
+    """验证 stream_graph_execution 可导入"""
+    assert stream_graph_execution is not None

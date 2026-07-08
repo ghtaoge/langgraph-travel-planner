@@ -1,28 +1,47 @@
-"""SSE 流式输出封装 — astream 逐节点 + 逐 token 流式
+"""SSE 流式输出封装 — astream 逐节点 + 逐 token 流式 + DB 批次写入
 
-LangGraph v1.x 知识点:
-#22 Streaming — astream(stream_mode=["updates", "custom"]) 逐节点推送 + token 级别推送
-#24 get_stream_writer — 节点内 writer({"token": ...}) → custom stream 事件
+核心改动:
+1. 每个 SSE token 推送前端的同时，缓存到批次缓冲
+2. 每 50 tokens 或 500ms → UPDATE chat_messages content (批次追加)
+3. interrupt 事件 → 写入 metadata 到 chat_messages
+4. completed 事件 → 写入最终完整 content + 更新 conversation.status
+5. intent_parser node_end → 更新对话标题
 """
 
 import json
 import logging
+import time
 
 from langgraph.types import Command
+
+from app.core.database import (
+    insert_message,
+    append_message_content,
+    append_thinking_content,
+    finalize_message,
+    update_message_metadata,
+    update_conversation_status,
+    update_conversation_title,
+)
 
 logger = logging.getLogger("langgraph-travel-planner.streaming")
 
 
-async def stream_graph_execution(graph, input_data: dict | Command, config: dict):
-    """SSE 流式执行 — astream(stream_mode=["updates", "custom"]) 双模式推送
+async def stream_graph_execution(graph, input_data: dict | Command, config: dict, pool, conversation_id: str):
+    """SSE 流式执行 — 双模式推送 + DB 批次写入
 
-    策略:
-    1. "custom" 模式: 捕获 get_stream_writer() 逐 token 事件 — 实时推送 LLM 输出
-    2. "updates" 模式: 捕获节点完成事件 — 推送 node_start/node_end + 进度
-    3. __interrupt__ chunk → 发送 interrupt 事件
-    4. 图完成后 yield completed 事件
+    Args:
+        graph: 编译后的 LangGraph 图实例
+        input_data: 图输入数据或 Command(resume=...)
+        config: LangGraph config (含 thread_id)
+        pool: asyncpg 连接池
+        conversation_id: 对话 ID (用于 DB 写入)
     """
     is_resume = isinstance(input_data, Command)
+
+    # 创建空 assistant 消息行
+    assistant_msg_id = await insert_message(pool, conversation_id, "assistant")
+    thinking_buffer = []
 
     # 发送开始事件
     if not is_resume:
@@ -30,8 +49,16 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
     else:
         yield json.dumps({"type": "custom", "data": {"status": "恢复执行...", "progress": 0.5}})
 
+    # Token 批次写入参数
+    BATCH_SIZE = 50  # 每 50 tokens 写一次
+    FLUSH_INTERVAL = 0.5  # 每 500ms 写一次
+    content_buffer = []
+    last_flush_time = time.time()
+
+    # 意图解析结果 (用于标题更新)
+    intent_result = None
+
     try:
-        # 双模式流式: updates (节点完成) + custom (token 级别 / get_stream_writer)
         stream = graph.astream(input_data, config=config, stream_mode=["updates", "custom"])
 
         async for chunk in stream:
@@ -41,34 +68,47 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
                 # ── Token 级别流式事件 ──
                 if isinstance(data, dict):
                     if "token" in data:
-                        # LLM 输出 token → 逐 token 推送前端
+                        token_content = data["token"]
                         yield json.dumps({
                             "type": "token",
                             "node": data.get("node", ""),
-                            "content": data["token"],
+                            "content": token_content,
                             "token_type": "output",
                         })
+                        # 缓存到批次
+                        content_buffer.append(token_content)
+                        # 检查是否需要 flush
+                        if len(content_buffer) >= BATCH_SIZE or (time.time() - last_flush_time) >= FLUSH_INTERVAL:
+                            chunk_text = "".join(content_buffer)
+                            await append_message_content(pool, assistant_msg_id, chunk_text)
+                            content_buffer.clear()
+                            last_flush_time = time.time()
+
                     elif "thinking_token" in data:
-                        # DeepSeek reasoning_content (思考 token) → 推送前端
+                        thinking_content = data["thinking_token"]
                         yield json.dumps({
                             "type": "token",
                             "node": data.get("node", ""),
-                            "content": data["thinking_token"],
+                            "content": thinking_content,
                             "token_type": "thinking",
                         })
+                        thinking_buffer.append(thinking_content)
+                        # 思考 token 也做批次写入
+                        if len(thinking_buffer) >= BATCH_SIZE or (time.time() - last_flush_time) >= FLUSH_INTERVAL:
+                            chunk_thinking = "".join(thinking_buffer)
+                            await append_thinking_content(pool, assistant_msg_id, chunk_thinking)
+                            thinking_buffer.clear()
+
                     else:
-                        # 其他 custom 事件 (status, progress, 等) — 保持原格式
                         yield json.dumps({"type": "custom", "data": data})
 
             elif mode == "updates":
-                # ── Node 级别更新 ──
                 for node_name, node_output in data.items():
 
-                    # Debug: 记录每个 astream chunk
                     if isinstance(node_output, dict):
-                        logger.info(f"astream chunk: node={node_name}, output_keys={list(node_output.keys())}, approval_status={node_output.get('approval_status')}")
+                        logger.info(f"astream chunk: node={node_name}, output_keys={list(node_output.keys())}")
 
-                    # __interrupt__ 是 LangGraph 特殊标记
+                    # __interrupt__ 处理
                     if node_name == "__interrupt__":
                         state = await graph.aget_state(config)
                         for task in state.tasks:
@@ -76,26 +116,43 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
                                 interrupt_value = task.interrupts[0].value
                                 question_json = json.dumps(interrupt_value, ensure_ascii=False) if isinstance(interrupt_value, dict) else str(interrupt_value)
                                 yield json.dumps({"type": "interrupt", "node": task.name, "question": question_json})
+
+                                # 写入 interrupt metadata 到 DB
+                                await update_message_metadata(pool, assistant_msg_id, {
+                                    "interrupt_type": task.name,
+                                    "interrupt_value": interrupt_value if isinstance(interrupt_value, dict) else {},
+                                })
+                                # 更新对话状态为 interrupted
+                                await update_conversation_status(pool, conversation_id, "interrupted")
+
+                                # 最终 flush 所有未写入的缓冲
+                                if content_buffer:
+                                    await append_message_content(pool, assistant_msg_id, "".join(content_buffer))
+                                    content_buffer.clear()
+                                if thinking_buffer:
+                                    await append_thinking_content(pool, assistant_msg_id, "".join(thinking_buffer))
+                                    thinking_buffer.clear()
                                 return
                         yield json.dumps({"type": "interrupt", "node": "unknown", "question": json.dumps(node_output, ensure_ascii=False, default=str)})
                         return
 
-                    # 正常节点: node_start → custom(进度) → node_end
+                    # 正常节点
                     yield json.dumps({"type": "node_start", "node": node_name})
 
-                    # 详细日志
-                    if node_name in ("user_approve", "quality_check", "itinerary_refine") and isinstance(node_output, dict):
-                        logger.info(f"  {node_name} output: {json.dumps(node_output, ensure_ascii=False, default=str)[:300]}")
+                    # intent_parser 完成后提取标题
+                    if node_name == "intent_parser" and isinstance(node_output, dict):
+                        destination = node_output.get("destination", "")
+                        duration = node_output.get("duration", 0)
+                        style = node_output.get("travel_style", "")
+                        if destination:
+                            title = f"{destination}{duration}天{style}"
+                            await update_conversation_title(pool, conversation_id, title)
 
                     output_summary = _summarize_output(node_name, node_output)
                     if output_summary:
                         yield json.dumps({
                             "type": "custom",
-                            "data": {
-                                "status": output_summary,
-                                "node": node_name,
-                                "progress": _estimate_progress(node_name),
-                            },
+                            "data": {"status": output_summary, "node": node_name, "progress": _estimate_progress(node_name)},
                         })
 
                     yield json.dumps({"type": "node_end", "node": node_name})
@@ -111,7 +168,15 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
             yield json.dumps({"type": "completed", "data": {"final_plan": ""}})
         return
 
-    # astream 结束 → 检查是否正常完成或有 interrupt
+    # 最终 flush 所有未写入的缓冲
+    if content_buffer:
+        await append_message_content(pool, assistant_msg_id, "".join(content_buffer))
+        content_buffer.clear()
+    if thinking_buffer:
+        await append_thinking_content(pool, assistant_msg_id, "".join(thinking_buffer))
+        thinking_buffer.clear()
+
+    # astream 结束 → 检查状态
     state = await graph.aget_state(config)
 
     # 检查 interrupt
@@ -121,11 +186,21 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
                 interrupt_value = task.interrupts[0].value
                 question_json = json.dumps(interrupt_value, ensure_ascii=False) if isinstance(interrupt_value, dict) else str(interrupt_value)
                 yield json.dumps({"type": "interrupt", "node": task.name, "question": question_json})
+                await update_message_metadata(pool, assistant_msg_id, {
+                    "interrupt_type": task.name,
+                    "interrupt_value": interrupt_value if isinstance(interrupt_value, dict) else {},
+                })
+                await update_conversation_status(pool, conversation_id, "interrupted")
                 return
 
     # 图正常完成
     final_state = state.values
     final_plan = final_state.get("final_plan", "")
+
+    # 最终写入 — 完整 content + thinking_content
+    # 从 DB 读取当前累积的 content 作为最终版本
+    await finalize_message(pool, assistant_msg_id, final_plan if final_plan else "", None)
+    await update_conversation_status(pool, conversation_id, "completed")
     yield json.dumps({"type": "completed", "data": {"final_plan": final_plan}})
 
 
@@ -133,19 +208,16 @@ def _summarize_output(node_name: str, output: dict) -> str:
     """从节点输出中提取简短描述"""
     if not output or not isinstance(output, dict):
         return ""
-
     if node_name == "destination_research":
         research = output.get("research_result", {})
         if isinstance(research, dict) and research.get("_summary"):
             return f"调研完成: {str(research['_summary'])[:80]}"
         return "完成目的地调研"
-
     if node_name == "itinerary_refine":
         itinerary = output.get("itinerary", {})
         if isinstance(itinerary, dict) and itinerary.get("daily_plans"):
             return f"行程细化: {len(itinerary['daily_plans'])}天安排"
         return "完成行程细化"
-
     summaries = {
         "intent_parser": lambda o: f"解析意图: 目标={o.get('destination', '?')}, {o.get('duration', '?')}天, 风格={o.get('travel_style', '?')}",
         "plan_generator": lambda o: f"生成 {len(o.get('plans', []))} 套旅行方案",
@@ -156,14 +228,12 @@ def _summarize_output(node_name: str, output: dict) -> str:
         "user_select": lambda o: "等待用户选择方案",
         "user_approve": lambda o: "等待用户审批",
     }
-
     fn = summaries.get(node_name)
     if fn:
         try:
             return fn(output)
         except:
             return ""
-
     return ""
 
 
