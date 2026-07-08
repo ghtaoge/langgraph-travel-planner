@@ -1,0 +1,36 @@
+[project]
+name = "langgraph-travel-planner"
+version = "0.1.0"
+description = "LangGraph 旅游规划助手 — 26 个知识点全覆盖演示项目"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+    "langgraph>=0.4.0",
+    "langchain-openai>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langgraph-checkpoint>=2.0.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0.0",
+    "sse-starlette>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["app/tests"]
