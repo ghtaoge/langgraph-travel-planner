@@ -1,8 +1,8 @@
 # LangGraph Travel Planner
 
-基于 LangGraph 的旅游规划助手 — 26 个 LangGraph 知识点全覆盖，开源演示项目。
+基于 LangGraph 的旅游规划助手 — 企业级持久化 + 多对话并发 + JWT 认证。
 
-![Vue 3](https://img.shields.io/badge/Vue-3-green) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-0.4+-orange) ![Python](https://img.shields.io/badge/Python-3.11+-blue)
+![Vue 3](https://img.shields.io/badge/Vue-3-green) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-0.4+-orange) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue) ![JWT](https://img.shields.io/badge/JWT-Auth-green) ![Python](https://img.shields.io/badge/Python-3.11+-blue)
 
 ## 功能概览
 
@@ -10,87 +10,74 @@
 - ⏸️ **人机协同 (Human-in-the-loop)** — 方案选择、行程审批、逐日确认三重 interrupt
 - ⚡ **实时 SSE 流式** — 逐 token 输出，节点执行进度可视化
 - 🔙 **Checkpoint 回退** — 回退到任意 checkpoint 重新规划
-- 💾 **跨对话记忆** — Store 保存用户画像 + 对话摘要，再次打开不失忆
+- 💾 **PostgreSQL 持久化** — 聊天记录、checkpoint、用户画像全部存 PG，刷新不丢失
+- 🔑 **JWT 认证** — 独立用户系统，注册/登录，所有 API 需认证
+- 📂 **多对话并发** — DeepSeek 风格侧边栏，切换对话后台继续执行
+- 🔄 **刷新恢复** — 刷新页面自动恢复聊天记录 + interrupt 状态
 - 🗺️ **Leaflet 地图** — 行程景点可视化标记
 - 📸 **行程卡片导出** — html2canvas 截图保存
 - 🔗 **LangSmith Trace** — 可视化追踪每次图执行
-
-## 26 个 LangGraph 知识点
-
-| # | 知识点 | 实现 |
-|---|---|---|
-| 1 | StateGraph | `build_travel_planner_graph()` |
-| 2 | START / END | 主图 + 子图入口出口 |
-| 3 | add_node | 11 个主图节点 + 5 个子图节点 |
-| 4 | add_edge | 12 条主图边 + 5 条子图边 |
-| 5 | add_conditional_edges | `route_after_quality` (score<7 循环 / score>=7 输出) |
-| 6 | TypedDict State | `TravelState`, `DestinationState`, `ItineraryState` |
-| 7 | Annotated reducers | `operator.add` (messages, plans), `merge_dicts` (research_result) |
-| 8 | interrupt() | `user_select`, `user_approve`, `daily_confirm` 三级 |
-| 9 | Command(resume=...) | POST /resume 恢复 interrupt |
-| 10 | Command(goto=...) | 子图 `synthesize_findings` → Command.PARENT |
-| 11 | Send | `plan_generator` (3 方案并行) + `city_research_fanout` (多城市并行) |
-| 12 | Subgraph 嵌套 | destination_research + itinerary_refine 子图 |
-| 13 | 共享 + 私有 State key | 子图 TravelState 共享 key + 子图私有 key |
-| 14 | ToolNode | `create_react_agent` 带 4 个 @tool |
-| 15 | Structured Output | `IntentResult`, `BudgetResult` + `with_structured_output` |
-| 16 | RetryPolicy | `retry_policy=RetryPolicy(max_attempts=3)` |
-| 17 | Checkpoint | MemorySaver (dev) / SqliteSaver (prod) |
-| 18 | Store | InMemoryStore + namespace 用户画像/对话摘要 |
-| 19 | get_stream_writer | `intent_parser_node` 自定义 SSE 进度事件 |
-| 20 | astream_events v3 | `stream_graph_execution()` token 级流式 |
-| 21 | MessagesState | `Annotated[list[BaseMessage], operator.add]` |
-| 22 | context_schema | `UserContext(user_id)` 注入到每个节点 |
-| 23 | SSE 事件协议 | node_start/end/token/interrupt/custom/completed |
-| 24 | 多 Agent | 意图解析 + 目的地研究 + 方案生成 + ReAct Agent + 质量检查 |
-| 25 | 分支循环 | quality<7 → itinerary_refine 循环 (max 3 次) |
-| 26 | Store 跨对话 | 保存/加载用户画像 + 对话摘要 |
 
 ## 项目结构
 
 ```
 langgraph-travel-planner/
-├── backend/                  # FastAPI + LangGraph
+├── backend/                  # FastAPI + LangGraph + PostgreSQL
 │   ├── app/
 │   │   ├── config/           # settings, tools, prompts
-│   │   ├── core/             # llm, checkpoint, store, streaming
+│   │   ├── core/             # llm, auth, database, checkpoint, store, streaming
 │   │   ├── modules/
 │   │   │   ├── planner/      # 主图 (state, nodes, graph, conditions)
 │   │   │   ├── destination/  # 子图A (state, nodes, graph, tools)
 │   │   │   ├── itinerary/    # 子图B (state, nodes, graph, react_agent, tools)
-│   │   ├── api/              # routes (travel, topology, history), schemas
-│   │   ├── main.py           # FastAPI 入口
-│   │   └── tests/            # 37 个 pytest 测试
-│   ├── pyproject.toml
-│   └── requirements.txt
+│   │   ├── api/              # routes (auth, travel, topology, history, conversations), schemas
+│   │   ├── migrations/       # init.sql (DDL)
+│   │   ├── main.py           # FastAPI 入口 + lifespan PG 初始化
+│   │   └── tests/            # pytest 测试
+│   ├── requirements.txt
+│   └── .env.example
 │
-├── frontend/                 # Vue 3 + Vite + TypeScript
+├── frontend/                 # Vue 3 + Vue Router + Pinia + TypeScript
 │   ├── src/
 │   │   ├── types/            # SSE, itinerary, graph 类型定义
-│   │   ├── stores/           # Pinia (chat, graph, history)
-│   │   ├── services/         # SSE service, API service
-│   │   ├── components/       # 13 个 Vue 组件
-│   │   ├── App.vue
+│   │   ├── stores/           # Pinia (chat, graph, auth, conversations)
+│   │   ├── router/           # Vue Router + 认证守卫
+│   │   ├── views/            # ChatView, LoginView, RegisterView
+│   │   ├── services/         # SSE service, API service (JWT interceptor)
+│   │   ├── components/       # Vue 组件 (MessageList, PlanSelector, etc.)
+│   │   ├── App.vue           # DeepSeek 风格侧边栏 + router-view
 │   │   └── main.ts
 │   ├── vite.config.ts
 │   └── package.json
 │
-├── docker-compose.yml
+├── docker-compose.yml        # PostgreSQL + backend + frontend
 ├── .env.example
-├── LICENSE
-└── .gitignore
+└── README.md
 ```
 
 ## 快速开始
 
-### 1. 配置环境变量
+### 1. 启动 PostgreSQL
+
+```bash
+# 使用 Docker
+docker compose up postgres -d
+
+# 或本地安装 PostgreSQL 16, 创建数据库
+createdb travel_planner
+```
+
+### 2. 配置环境变量
 
 ```bash
 cp .env.example backend/.env
-# 编辑 backend/.env, 设置 LLM_API_KEY (DeepSeek/Qwen/OpenAI)
+# 编辑 backend/.env, 必填:
+#   LLM_API_KEY=your-deepseek-key
+#   POSTGRES_URI=postgresql://travel_user:travel_pass_2026@localhost:5432/travel_planner
+#   JWT_SECRET_KEY=your-random-secret-string
 ```
 
-### 2. 本地开发 (推荐)
+### 3. 本地开发
 
 ```bash
 # 后端
@@ -102,29 +89,41 @@ uvicorn app.main:app --reload --port 8000
 cd frontend
 npm install
 npm run dev
-# 打开 http://localhost:5173
+# 打开 http://localhost:5173 → 自动跳转登录页
 ```
 
-### 3. Docker 一键部署
+### 4. Docker 一键部署
 
 ```bash
 cp .env.example backend/.env
-# 编辑 backend/.env
-docker-compose up --build
-# 打开 http://localhost
-```
-
-### 4. 运行测试
-
-```bash
-cd backend
-pytest app/tests/ -v
-# 37 tests should pass
+# 编辑 backend/.env (设置 LLM_API_KEY + JWT_SECRET_KEY)
+docker compose up --build
+# 打开 http://localhost → 登录页
 ```
 
 ## API 文档
 
 启动后端后访问 `http://localhost:8000/docs` (Swagger UI)
+
+### 认证 API
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/api/auth/register` | POST | 注册新用户 → JWT |
+| `/api/auth/login` | POST | 登录 → JWT |
+| `/api/auth/me` | GET | 当前用户信息 (需认证) |
+
+### 对话 API
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/api/conversations` | GET | 用户对话列表 (分页) |
+| `/api/conversations` | POST | 创建新对话 |
+| `/api/conversations/:id` | PATCH | 更新标题/状态 |
+| `/api/conversations/:id` | DELETE | 删除对话 |
+| `/api/conversations/:id/messages` | GET | 获取对话消息 (含 thinking/metadata) |
+
+### 旅游规划 API (需认证)
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
@@ -132,16 +131,14 @@ pytest app/tests/ -v
 | `/api/travel/resume` | POST | 恢复 interrupt (SSE) |
 | `/api/travel/rollback` | POST | 回退到 checkpoint (SSE) |
 | `/api/travel/topology` | GET | 图拓扑定义 |
-| `/api/travel/history` | GET | 对话摘要列表 |
+| `/api/travel/history` | GET | 对话历史列表 |
 | `/api/travel/profile` | GET | 用户旅行画像 |
-| `/api/travel/conversation/{id}` | GET | 对话详情 |
-| `/api/travel/states/{id}` | GET | Checkpoint 时间线 |
 
 ## 技术栈
 
-**后端:** Python 3.11 · FastAPI 0.115 · LangGraph 0.4+ · LangChain · Pydantic · Uvicorn
+**后端:** Python 3.11 · FastAPI 0.115 · LangGraph 0.4+ · PostgreSQL 16 · AsyncPostgresSaver · PostgresStore · asyncpg · PyJWT · bcrypt
 
-**前端:** Vue 3 · Vite 6 · TypeScript · Pinia · Leaflet · html2canvas · Axios
+**前端:** Vue 3 · Vue Router 4 · Vite 8 · TypeScript · Pinia · Axios · Leaflet · html2canvas
 
 **LLM:** DeepSeek / Qwen / OpenAI (OpenAI SDK 兼容)
 
