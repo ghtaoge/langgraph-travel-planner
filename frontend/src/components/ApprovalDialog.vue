@@ -135,11 +135,17 @@ function reject() {
 .approval-dialog {
   padding: 20px 24px;
   background: var(--bg-secondary);
-  border-radius: 16px;
+  border-radius: 8px;
   border: 1px solid rgba(245,158,11,0.4);
   animation: fadeIn 0.3s ease-out;
   margin: 0 24px 8px;
+  max-height: min(70vh, 720px);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
+
+.approval-dialog::-webkit-scrollbar { width: 8px; }
+.approval-dialog::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 8px; }
 
 .dialog-header { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
 .header-icon { font-size: 28px; }
@@ -218,7 +224,17 @@ function reject() {
 .tip-chip { font-size: 12px; color: var(--text-tertiary); background: var(--bg-tertiary); padding: 4px 10px; border-radius: 6px; }
 
 /* ── 操作 ── */
-.action-bar { display: flex; gap: 12px; margin-bottom: 10px; }
+.action-bar {
+  position: sticky;
+  bottom: 54px;
+  z-index: 2;
+  display: flex;
+  gap: 12px;
+  margin: 0 -24px;
+  padding: 12px 24px 10px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+}
 .btn-approve {
   padding: 12px 28px; background: #22c55e; color: white; border: none; border-radius: 10px;
   cursor: pointer; font-size: 15px; font-weight: 600; transition: all 0.2s;
@@ -230,13 +246,46 @@ function reject() {
 }
 .btn-reject:hover { background: rgba(239,68,68,0.25); transform: translateY(-1px); }
 
-.comment-row { margin-top: 4px; }
+.comment-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin: 0 -24px -20px;
+  padding: 0 24px 16px;
+  background: var(--bg-secondary);
+}
 .comment-input {
   width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 10px;
   background: var(--bg-primary); color: var(--text-primary); font-size: 14px;
   transition: border-color 0.2s;
 }
 .comment-input:focus { border-color: var(--accent-color); outline: none; }
+
+@media (max-width: 640px) {
+  .approval-dialog {
+    margin: 0 12px 8px;
+    padding: 16px;
+    max-height: min(72vh, 640px);
+  }
+
+  .action-bar {
+    bottom: 54px;
+    margin: 0 -16px;
+    padding: 12px 16px 10px;
+  }
+
+  .comment-row {
+    margin: 0 -16px -16px;
+    padding: 0 16px 14px;
+  }
+
+  .btn-approve,
+  .btn-reject {
+    flex: 1;
+    padding: 11px 12px;
+    white-space: nowrap;
+  }
+}
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 </style>

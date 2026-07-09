@@ -266,13 +266,15 @@ async def create_account_user(
     email: Optional[str] = None,
 ) -> dict:
     """创建带资料字段的用户"""
+    phone_verified = phone is not None
+    email_verified = email is not None
     row = await pool.fetchrow(
         "INSERT INTO users (username, password_hash, nickname, phone, email, phone_verified, email_verified) "
-        "VALUES ($1, $2, $3, $4, $5, $4 IS NOT NULL, $5 IS NOT NULL) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7) "
         "RETURNING id, username, COALESCE(nickname, username) AS nickname, "
         "COALESCE(phone, '') AS phone, COALESCE(email, '') AS email, phone_verified, email_verified, "
         "COALESCE(avatar_url, '') AS avatar_url, COALESCE(theme, 'dark') AS theme, created_at, updated_at",
-        username, password_hash, nickname, phone, email,
+        username, password_hash, nickname, phone, email, phone_verified, email_verified,
     )
     return {
         "id": str(row["id"]),
