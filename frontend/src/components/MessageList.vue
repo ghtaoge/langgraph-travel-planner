@@ -1,9 +1,17 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useChatStore } from '@/stores'
+import type { ChatMessage } from '@/stores/chat'
 
 const chatStore = useChatStore()
 const expandedThinking = ref<Set<string>>(new Set())
+const listRef = ref<HTMLElement | null>(null)
+const visibleMessages = computed(() => chatStore.messages.filter(isVisibleMessage))
+
+watch(() => [visibleMessages.value.length, chatStore.isLoading, chatStore.currentNode], async () => {
+  await nextTick()
+  if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
+})
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -15,6 +23,49 @@ function isRichContent(content: string): boolean {
     || content.includes('Day') || content.includes('风格')
 }
 
+
+function looksLikeInternalJson(content: string): boolean {
+  const trimmed = content.trim()
+  if (!trimmed) return false
+  const markers = [
+    '"destination"', "'destination'",
+    '"plan_id"', "'plan_id'",
+    '"total_budget"', "'total_budget'",
+    '"budget_breakdown"', "'budget_breakdown'",
+  ]
+  return trimmed.startsWith('{') && markers.some(marker => trimmed.includes(marker))
+}
+
+function isInternalAssistantJson(msg: ChatMessage): boolean {
+  return msg.role === 'assistant' && looksLikeInternalJson(msg.content || '')
+}
+
+function hasVisibleContent(msg: ChatMessage): boolean {
+  return Boolean(displayContent(msg).trim() || msg.meta?.thinking || msg.streaming)
+}
+
+function isVisibleMessage(msg: ChatMessage): boolean {
+  return !isInternalAssistantJson(msg) && hasVisibleContent(msg)
+}
+
+function formatSystemMessage(content: string): string {
+  const prefix = '恢复操作:'
+  if (!content.startsWith(prefix)) return content
+  const raw = content.slice(prefix.length).trim()
+  try {
+    const data = JSON.parse(raw) as Record<string, unknown>
+    if (data.selected_plan_id) return `已选择方案 #${data.selected_plan_id}`
+    if (data.approval_status === 'approved') return '已批准行程'
+    if (data.approval_status === 'rejected') return `已要求调整：${data.approval_comment || '未填写原因'}`
+  } catch {
+    return '已继续执行'
+  }
+  return '已继续执行'
+}
+
+function displayContent(msg: ChatMessage): string {
+  return msg.role === 'system' ? formatSystemMessage(msg.content) : msg.content
+}
 function toggleThinking(msgId: string) {
   if (expandedThinking.value.has(msgId)) {
     expandedThinking.value.delete(msgId)
@@ -29,8 +80,8 @@ function isThinkingExpanded(msgId: string): boolean {
 </script>
 
 <template>
-  <div class="message-list">
-    <div v-if="chatStore.messages.length === 0" class="empty-state">
+  <div ref="listRef" class="message-list">
+    <div v-if="visibleMessages.length === 0" class="empty-state">
       <div class="empty-icon">🌍</div>
       <h2>旅游规划助手</h2>
       <p>描述您的旅行需求，开始规划</p>
@@ -40,30 +91,32 @@ function isThinkingExpanded(msgId: string): boolean {
       </div>
     </div>
 
-    <div v-for="msg in chatStore.messages" :key="msg.id" :class="['message', `msg-${msg.role}`]">
+    <div v-for="msg in visibleMessages" :key="msg.id" :class="['message', `msg-${msg.role}`]">
       <div class="msg-avatar">
         <span v-if="msg.role === 'user'">👤</span>
         <span v-else-if="msg.role === 'system'">📋</span>
         <span v-else>🤖</span>
       </div>
-      <div :class="['msg-body', { 'msg-rich': isRichContent(msg.content) }]">
-        <!-- 思考过程区域 (DeepSeek reasoning_content) -->
-        <div v-if="msg.meta?.thinking" class="thinking-section" @click="toggleThinking(msg.id)">
-          <div class="thinking-header">
-            <span class="thinking-icon">💭</span>
-            <span class="thinking-label">思考过程</span>
-            <span class="thinking-toggle">{{ isThinkingExpanded(msg.id) ? '▼' : '▶' }}</span>
+      <div class="msg-content">
+        <div class="msg-time">{{ formatTime(msg.timestamp) }}</div>
+        <div :class="['msg-body', { 'msg-rich': isRichContent(displayContent(msg)) }]">
+          <!-- 思考过程区域 (DeepSeek reasoning_content) -->
+          <div v-if="msg.meta?.thinking" class="thinking-section" @click="toggleThinking(msg.id)">
+            <div class="thinking-header">
+              <span class="thinking-icon">💭</span>
+              <span class="thinking-label">思考过程</span>
+              <span class="thinking-toggle">{{ isThinkingExpanded(msg.id) ? '▼' : '▶' }}</span>
+            </div>
+            <div v-if="isThinkingExpanded(msg.id)" class="thinking-content">
+              {{ msg.meta.thinking as string }}
+            </div>
           </div>
-          <div v-if="isThinkingExpanded(msg.id)" class="thinking-content">
-            {{ msg.meta.thinking as string }}
-          </div>
-        </div>
 
-        <!-- 正常输出内容 -->
-        <div v-if="msg.content" class="msg-text">{{ msg.content }}</div>
-        <span v-if="msg.streaming && !msg.meta?.thinking && !msg.content" class="streaming-dot">●</span>
+          <!-- 正常输出内容 -->
+          <div v-if="displayContent(msg)" class="msg-text">{{ displayContent(msg) }}</div>
+          <span v-if="msg.streaming && !msg.meta?.thinking && !displayContent(msg)" class="streaming-dot">●</span>
+        </div>
       </div>
-      <div class="msg-time">{{ formatTime(msg.timestamp) }}</div>
     </div>
 
     <div v-if="chatStore.isLoading && !chatStore.hasInterrupt" class="loading-bar">
@@ -79,12 +132,17 @@ function isThinkingExpanded(msgId: string): boolean {
   overflow-y: auto;
   padding: 16px 20px;
   scroll-behavior: smooth;
+  min-height: 0;
 }
 
 /* ── 空状态 ── */
 .empty-state {
   text-align: center;
-  padding: 60px 20px;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 32px 20px;
 }
 .empty-icon { font-size: 48px; margin-bottom: 16px; }
 .empty-state h2 { font-size: 20px; color: var(--text-primary); font-weight: 600; margin-bottom: 8px; }
@@ -121,8 +179,15 @@ function isThinkingExpanded(msgId: string): boolean {
 .msg-assistant .msg-avatar { background: #1a1b2e; }
 .msg-system .msg-avatar { background: rgba(245,158,11,0.15); }
 
-.msg-body {
+.msg-content {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.msg-body {
   padding: 12px 16px;
   border-radius: 12px;
   position: relative;
@@ -194,8 +259,8 @@ function isThinkingExpanded(msgId: string): boolean {
 .msg-time {
   font-size: 11px;
   color: var(--text-tertiary);
-  padding-top: 4px;
-  align-self: flex-end;
+  line-height: 1;
+  padding-left: 2px;
 }
 
 .streaming-dot {

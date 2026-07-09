@@ -13,7 +13,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8011',
         changeOrigin: true,
         // SSE POST 请求需要保持流式响应
         headers: {

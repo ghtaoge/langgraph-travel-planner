@@ -4,7 +4,6 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { conversationsApi, messagesApi } from '@/services'
 import { useChatStore } from './chat'
-import { useAuthStore } from './auth'
 import type { Conversation, ChatMessageDB } from '@/types'
 
 export const useConversationsStore = defineStore('conversations', () => {
@@ -39,6 +38,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   async function switchTo(threadId: string) {
     activeThreadId.value = threadId
     const chatStore = useChatStore()
+    chatStore.setThreadId(threadId)
 
     // 如果该 threadId 的消息还没加载过 → 从 DB 拉取
     if (!chatStore.hasMessagesForThread(threadId)) {
@@ -54,6 +54,7 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   async function loadMessagesForThread(threadId: string) {
     const chatStore = useChatStore()
+    chatStore.setThreadId(threadId)
     try {
       const dbMessages = await messagesApi.fetch(threadId) as ChatMessageDB[]
       chatStore.setMessagesFromDB(threadId, dbMessages)
@@ -64,9 +65,10 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   async function restoreInterruptState(threadId: string) {
     const chatStore = useChatStore()
-    const lastMsg = chatStore.getLastAssistantMessage(threadId)
-    if (lastMsg?.metadata) {
-      chatStore.restoreInterruptFromMetadata(threadId, lastMsg.metadata)
+    chatStore.setThreadId(threadId)
+    const metadata = chatStore.getLastAssistantMetadata(threadId)
+    if (metadata) {
+      chatStore.restoreInterruptFromMetadata(threadId, metadata)
     }
   }
 

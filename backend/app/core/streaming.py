@@ -27,6 +27,31 @@ from app.core.database import (
 logger = logging.getLogger("langgraph-travel-planner.streaming")
 
 
+def _interrupt_value(raw_interrupt):
+    """Extract interrupt payload from LangGraph Interrupt or dict-like values."""
+    if hasattr(raw_interrupt, "value"):
+        return raw_interrupt.value
+    if isinstance(raw_interrupt, dict):
+        return raw_interrupt.get("value", raw_interrupt)
+    return raw_interrupt
+
+
+def _extract_interrupts(node_output):
+    """Return interrupt payloads from astream update output."""
+    if isinstance(node_output, (list, tuple)):
+        return [_interrupt_value(item) for item in node_output]
+    if isinstance(node_output, dict) and "__interrupt__" in node_output:
+        raw = node_output.get("__interrupt__") or []
+        if not isinstance(raw, (list, tuple)):
+            raw = [raw]
+        return [_interrupt_value(item) for item in raw]
+    if hasattr(node_output, "interrupts") and node_output.interrupts:
+        return [_interrupt_value(item) for item in node_output.interrupts]
+    return []
+
+
+
+
 async def stream_graph_execution(graph, input_data: dict | Command, config: dict, pool, conversation_id: str):
     """SSE 流式执行 — 双模式推送 + DB 批次写入
 
@@ -75,15 +100,8 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
                             "content": token_content,
                             "token_type": "output",
                         })
-                        # 缓存到批次
-                        content_buffer.append(token_content)
-                        # 检查是否需要 flush
-                        if len(content_buffer) >= BATCH_SIZE or (time.time() - last_flush_time) >= FLUSH_INTERVAL:
-                            chunk_text = "".join(content_buffer)
-                            await append_message_content(pool, assistant_msg_id, chunk_text)
-                            content_buffer.clear()
-                            last_flush_time = time.time()
-
+                        # Do not persist intermediate node JSON tokens into chat history.
+                        # Final user-facing content is written on completion; interrupts write metadata.
                     elif "thinking_token" in data:
                         thinking_content = data["thinking_token"]
                         yield json.dumps({
@@ -108,32 +126,31 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
                     if isinstance(node_output, dict):
                         logger.info(f"astream chunk: node={node_name}, output_keys={list(node_output.keys())}")
 
-                    # __interrupt__ 处理
-                    if node_name == "__interrupt__":
+                    # Interrupt handling: LangGraph may emit __interrupt__ as a node or inside node output.
+                    interrupt_payloads = _extract_interrupts(node_output)
+                    if node_name == "__interrupt__" and not interrupt_payloads:
                         state = await graph.aget_state(config)
                         for task in state.tasks:
                             if task.interrupts:
-                                interrupt_value = task.interrupts[0].value
-                                question_json = json.dumps(interrupt_value, ensure_ascii=False) if isinstance(interrupt_value, dict) else str(interrupt_value)
-                                yield json.dumps({"type": "interrupt", "node": task.name, "question": question_json})
+                                interrupt_payloads.append(_interrupt_value(task.interrupts[0]))
+                                node_name = task.name
+                                break
 
-                                # 写入 interrupt metadata 到 DB
-                                await update_message_metadata(pool, assistant_msg_id, {
-                                    "interrupt_type": task.name,
-                                    "interrupt_value": interrupt_value if isinstance(interrupt_value, dict) else {},
-                                })
-                                # 更新对话状态为 interrupted
-                                await update_conversation_status(pool, conversation_id, "interrupted")
-
-                                # 最终 flush 所有未写入的缓冲
-                                if content_buffer:
-                                    await append_message_content(pool, assistant_msg_id, "".join(content_buffer))
-                                    content_buffer.clear()
-                                if thinking_buffer:
-                                    await append_thinking_content(pool, assistant_msg_id, "".join(thinking_buffer))
-                                    thinking_buffer.clear()
-                                return
-                        yield json.dumps({"type": "interrupt", "node": "unknown", "question": json.dumps(node_output, ensure_ascii=False, default=str)})
+                    if interrupt_payloads:
+                        interrupt_value = interrupt_payloads[0]
+                        question_json = json.dumps(interrupt_value, ensure_ascii=False) if isinstance(interrupt_value, dict) else str(interrupt_value)
+                        yield json.dumps({"type": "interrupt", "node": node_name, "question": question_json})
+                        await update_message_metadata(pool, assistant_msg_id, {
+                            "interrupt_type": node_name,
+                            "interrupt_value": interrupt_value if isinstance(interrupt_value, dict) else {},
+                        })
+                        await update_conversation_status(pool, conversation_id, "interrupted")
+                        if content_buffer:
+                            await append_message_content(pool, assistant_msg_id, "".join(content_buffer))
+                            content_buffer.clear()
+                        if thinking_buffer:
+                            await append_thinking_content(pool, assistant_msg_id, "".join(thinking_buffer))
+                            thinking_buffer.clear()
                         return
 
                     # 正常节点

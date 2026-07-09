@@ -3,14 +3,14 @@
 import json
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from app.api.schemas import ResumeRequest, RollbackRequest, TravelStreamRequest
 from app.core.auth import get_current_user
-from app.core.database import get_db_pool, create_conversation, insert_message, update_conversation_status, update_conversation_title
+from app.core.database import get_db_pool, create_conversation, insert_message, update_conversation_status, update_conversation_title, get_conversation_status
 from app.core.streaming import stream_graph_execution
 from app.modules.planner.graph import build_travel_planner_graph
 
@@ -31,6 +31,19 @@ async def travel_stream(
     graph = await get_graph()
     pool = await get_db_pool()
     thread_id = request.thread_id or str(uuid.uuid4())
+
+    if request.thread_id:
+        status = await get_conversation_status(pool, thread_id)
+        if status == "interrupted":
+            raise HTTPException(
+                status_code=409,
+                detail="当前会话正在等待选择方案或审批，请先完成上方操作，或点击新对话重新开始。",
+            )
+        if status == "completed":
+            raise HTTPException(
+                status_code=409,
+                detail="该会话已完成，请点击新对话开始新的旅行规划。",
+            )
 
     # 创建对话记录
     await create_conversation(pool, current_user["id"], thread_id)
