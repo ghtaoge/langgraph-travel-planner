@@ -266,6 +266,10 @@ async def create_account_user(
     email: Optional[str] = None,
 ) -> dict:
     """创建带资料字段的用户"""
+    # 注意：不要在 SQL 中直接写 "$4 IS NOT NULL" 来推导验证状态。
+    # asyncpg 在 prepare 阶段无法从 IS NOT NULL 表达式里稳定推断参数类型，
+    # 会抛出 AmbiguousParameterError。这里先在 Python 层计算布尔值，再作为
+    # 明确的 $6/$7 参数传给 PostgreSQL，既避免类型歧义，也让注册逻辑更直观。
     phone_verified = phone is not None
     email_verified = email is not None
     row = await pool.fetchrow(

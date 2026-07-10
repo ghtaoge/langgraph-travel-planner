@@ -139,8 +139,11 @@ function reject() {
   border: 1px solid rgba(245,158,11,0.4);
   animation: fadeIn 0.3s ease-out;
   margin: 0 24px 8px;
+  /* 审批数据可能包含多天行程和大量活动，不能让卡片无限增高挤出聊天区域。 */
   max-height: min(70vh, 720px);
+  /* 长内容在审批卡片内部滚动，底部操作区通过 sticky 保持可见。 */
   overflow-y: auto;
+  /* 预留滚动条空间，避免内容高度刚好溢出时左右抖动。 */
   scrollbar-gutter: stable;
 }
 
@@ -225,6 +228,7 @@ function reject() {
 
 /* ── 操作 ── */
 .action-bar {
+  /* 按钮必须始终可点：当行程内容滚动时，操作区吸附在卡片底部输入框上方。 */
   position: sticky;
   bottom: 54px;
   z-index: 2;
@@ -247,6 +251,7 @@ function reject() {
 .btn-reject:hover { background: rgba(239,68,68,0.25); transform: translateY(-1px); }
 
 .comment-row {
+  /* 修改意见输入框固定在审批卡片最底部，避免被长行程内容推到不可见区域。 */
   position: sticky;
   bottom: 0;
   z-index: 2;
@@ -265,6 +270,7 @@ function reject() {
   .approval-dialog {
     margin: 0 12px 8px;
     padding: 16px;
+    /* 移动端视口更窄，保留略高的可视比例，同时仍限制在屏幕内。 */
     max-height: min(72vh, 640px);
   }
 
