@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import asyncpg
 
 from app.modules.trips.errors import (
+    PatchValidationError,
     RevisionConflictError,
     RevisionNotFoundError,
     TripNotFoundError,
@@ -50,6 +51,16 @@ class TripRepository:
         )
 
         async with self.pool.acquire() as connection, connection.transaction():
+            if conversation_id:
+                owns_conversation = await connection.fetchval(
+                    "SELECT EXISTS ("
+                    "SELECT 1 FROM conversations WHERE id = $1 AND user_id = $2"
+                    ")",
+                    UUID(conversation_id),
+                    UUID(user_id),
+                )
+                if not owns_conversation:
+                    raise PatchValidationError("conversation not found or not owned by user")
             await connection.execute(
                 "INSERT INTO trips "
                 "(id, user_id, conversation_id, title, destination, status, "

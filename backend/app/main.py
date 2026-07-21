@@ -10,7 +10,7 @@ if sys.platform == "win32":
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, conversations, history, travel, topology
+from app.api.routes import auth, conversations, history, travel, topology, trips
 from app.core.checkpoint import init_checkpointer, close_checkpointer
 from app.core.database import get_db_pool, close_db_pool, init_schema
 from app.core.store import init_store, close_store
@@ -67,6 +67,7 @@ app.include_router(conversations.router)
 app.include_router(travel.router)
 app.include_router(topology.router)
 app.include_router(history.router)
+app.include_router(trips.router)
 
 
 @app.get("/")

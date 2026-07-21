@@ -6,11 +6,10 @@ from uuid import UUID
 
 import pytest
 
-from app.modules.trips.errors import RevisionConflictError, TripNotFoundError
+from app.modules.trips.errors import PatchValidationError, RevisionConflictError, TripNotFoundError
 from app.modules.trips.models import Activity, Location, Trip, TripDay, TripDraft
 from app.modules.trips.patches import ActivityChanges, TripPatch, UpdateActivity
 from app.modules.trips.repository import TripRepository, _json, _load_snapshot
-
 
 USER_ID = "00000000-0000-0000-0000-000000000002"
 TRIP_ID = "00000000-0000-0000-0000-000000000001"
@@ -30,6 +29,7 @@ class AsyncContext:
 class FakeConnection:
     def __init__(self):
         self.fetchrow = AsyncMock()
+        self.fetchval = AsyncMock()
         self.execute = AsyncMock()
 
     def transaction(self):
@@ -113,6 +113,22 @@ async def test_create_writes_current_and_initial_revision():
     assert connection.execute.await_count == 2
     assert "INSERT INTO trips" in connection.execute.await_args_list[0].args[0]
     assert "INSERT INTO trip_revisions" in connection.execute.await_args_list[1].args[0]
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_conversation_not_owned_by_user():
+    connection = FakeConnection()
+    connection.fetchval.return_value = None
+    repository = TripRepository(FakePool(connection))
+
+    with pytest.raises(PatchValidationError, match="conversation"):
+        await repository.create(
+            USER_ID,
+            draft(),
+            conversation_id="00000000-0000-0000-0000-000000000099",
+        )
+
+    connection.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
