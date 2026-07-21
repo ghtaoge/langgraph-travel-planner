@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     # ── PostgreSQL ──
     POSTGRES_URI: str = "postgresql://travel_user:travel_pass_2026@localhost:5432/travel_planner"
 
+    # ── Travel data providers ──
+    AMAP_API_KEY: str = ""
+    AMAP_BASE_URL: str = "https://restapi.amap.com"
+    PROVIDER_TIMEOUT_SECONDS: float = 8.0
+    PROVIDER_CACHE_TTL_SECONDS: int = 3600
+    WEATHER_CACHE_TTL_SECONDS: int = 1800
+
     # ── JWT Auth ──
     JWT_SECRET_KEY: str = "change-me-in-production"
     JWT_EXPIRE_HOURS: int = 24
