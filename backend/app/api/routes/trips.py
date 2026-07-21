@@ -48,7 +48,7 @@ async def create_trip(
         return await repository.create(
             current_user["id"],
             TripDraft.model_validate(values),
-            request.conversation_id,
+            str(request.conversation_id) if request.conversation_id else None,
         )
     except TripError as error:
         _raise_http(error)

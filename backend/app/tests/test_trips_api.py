@@ -147,6 +147,24 @@ def test_invalid_trip_id_is_rejected_before_repository_call():
     assert response.status_code == 422
 
 
+def test_invalid_conversation_id_is_rejected_before_repository_call():
+    client, _ = make_client()
+
+    response = client.post(
+        "/api/trips",
+        json={
+            "title": "成都两日游",
+            "destination": "成都",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "conversation_id": "not-a-uuid",
+            "days": [],
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_production_app_registers_trip_routes():
     from app.main import app
 
