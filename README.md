@@ -7,6 +7,8 @@
 ## 功能概览
 
 - 🌍 **智能旅游规划** — 输入旅行需求，AI 生成多套行程方案
+- 🌦️ **真实旅行数据** — 高德天气、地理编码、POI 和步行/驾车路线，支持缓存与 Mock 降级
+- 🧾 **版本化 Trip** — 用户批准后保存独立行程快照、来源信息和不可变版本历史
 - ⏸️ **人机协同 (Human-in-the-loop)** — 方案选择、行程审批、逐日确认三重 interrupt
 - ⚡ **实时 SSE 流式** — 逐 token 输出，节点执行进度可视化
 - 🔙 **Checkpoint 回退** — 回退到任意 checkpoint 重新规划
@@ -45,6 +47,8 @@
 2. 发送消息 → 后端创建 conversation + 写 user 消息到 PG → SSE 流式执行 → token 批次写入 PG (50 tokens/500ms)
 3. 切换对话 → 断开旧 SSE → 后端继续执行并写 PG → 切回时从 DB 拉取完整消息
 4. 刷新页面 → Vue Router 加载 `/chat/:threadId` → 从 DB 恢复消息 + interrupt 状态
+5. PlanningGraph 查询 Provider → 校验候选方案 → 富化天气/位置/路线 → 用户审批
+6. 审批通过 → 将结构化行程保存为 Trip revision 1 → SSE 返回 `trip_id` 和版本
 
 ## 数据模型
 
@@ -57,6 +61,13 @@ conversations (id UUID, user_id, title, status[active/completed/interrupted], cr
 
 -- 聊天消息
 chat_messages (id UUID, conversation_id, role[user/assistant/system], content, thinking_content, metadata JSONB, created_at)
+
+-- 当前行程快照与不可变版本
+trips (id UUID, user_id, conversation_id, current_revision, snapshot JSONB, updated_at)
+trip_revisions (trip_id, revision, base_revision, reason, patch JSONB, snapshot JSONB)
+
+-- Provider 响应缓存；过期记录用于显式 stale 降级
+provider_cache (cache_key, provider, data_type, payload JSONB, fetched_at, expires_at)
 ```
 
 **LangGraph 自动管理的表：** `checkpoints`、`checkpoint_writes`、`checkpoint_blobs`、`store`（由 AsyncPostgresSaver / PostgresStore 创建）
@@ -114,6 +125,10 @@ langgraph-travel-planner/
 | `LLM_MODEL` | ❌ | LLM 模型名 | `deepseek-chat` (默认) |
 | `LLM_BASE_URL` | ❌ | LLM API 地址 | `https://api.deepseek.com` (默认) |
 | `POSTGRES_URI` | ✅ | PostgreSQL 连接串 | `postgresql://user:pass@host:5432/db` |
+| `AMAP_API_KEY` | ❌ | 高德 Web 服务 Key；留空使用 Mock Provider | 高德控制台申请的 Key |
+| `PROVIDER_TIMEOUT_SECONDS` | ❌ | Provider 请求超时 | `8` |
+| `PROVIDER_CACHE_TTL_SECONDS` | ❌ | POI、位置、路线缓存秒数 | `3600` |
+| `WEATHER_CACHE_TTL_SECONDS` | ❌ | 天气缓存秒数 | `1800` |
 | `JWT_SECRET_KEY` | ✅ | JWT 签名密钥 (生产环境务必修改) | 随机字符串 |
 | `JWT_EXPIRE_HOURS` | ❌ | Token 过期时间 | `24` (默认) |
 | `LANGSMITH_API_KEY` | ❌ | LangSmith 追踪 Key | 可选，不填则关闭追踪 |
@@ -248,7 +263,7 @@ npm run dev
 | `interrupt` | human-in-the-loop 暂停 (含 plans/itinerary/budget 等结构化数据) |
 | `custom` | 进度/状态更新 |
 | `node_end` | 节点执行完成 |
-| `completed` | 图执行完成 (含 final_plan) |
+| `completed` | 图执行完成，包含 `final_plan`、`trip_id`、`trip_revision` 和 Trip 快照 |
 
 ## 关键设计决策
 
@@ -283,6 +298,17 @@ interrupt 信息存储在 `chat_messages.metadata` (JSONB)：
 ```
 
 刷新后，前端从 DB 读取最后一条 assistant 消息的 metadata，自动恢复 PlanSelector / ApprovalDialog。
+
+### Provider 缓存与降级
+
+- 业务图只依赖统一 Provider 契约，不解析高德原始响应。
+- 缓存未过期时直接返回 PostgreSQL 快照；外部请求失败时优先返回带 `stale=true` 的旧缓存。
+- 无缓存或未配置 `AMAP_API_KEY` 时使用结构一致的 Mock Provider，并标记 `estimated=true`。
+- Provider 来源、抓取时间、置信度、过期状态和警告随行程保存，审批界面会展示风险提示。
+
+### Trip 与 Checkpoint 的边界
+
+LangGraph Checkpoint 保存工作流执行状态；`trips.snapshot` 保存用户已经确认的业务事实。审批通过后才创建 Trip，图重试会按 `user_id + conversation_id` 复用已有 Trip，历史恢复则创建新版本而不删除旧记录。
 
 ## 技术栈
 
