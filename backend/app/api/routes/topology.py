@@ -1,9 +1,7 @@
 """图拓扑定义 API — 前端渲染拓扑图用
 
-与 app/modules/planner/graph.py 对齐 — 10 个节点:
-  intent_parser, destination_research, plan_generator, user_select,
-  itinerary_refine, budget_calculator, user_approve, quality_check,
-  format_output, save_summary
+与 app/modules/planner/graph.py 对齐，包含 Provider 研究、确定性校验、
+行程富化和持久化节点。
 """
 
 from fastapi import APIRouter
@@ -20,12 +18,15 @@ async def get_topology():
     nodes = [
         {"id": "intent_parser", "label": "意图解析", "type": "llm"},
         {"id": "destination_research", "label": "目的地研究", "type": "subgraph"},
+        {"id": "provider_research", "label": "实时数据研究", "type": "provider"},
         {"id": "plan_generator", "label": "方案生成", "type": "llm"},
+        {"id": "validate_candidates", "label": "候选校验", "type": "validator"},
         {"id": "user_select", "label": "用户选择", "type": "interrupt"},
         {"id": "itinerary_refine", "label": "日程细化", "type": "subgraph"},
+        {"id": "enrich_itinerary", "label": "天气路线富化", "type": "provider"},
         {"id": "budget_calculator", "label": "预算计算", "type": "llm"},
         {"id": "user_approve", "label": "最终审批", "type": "interrupt"},
-        {"id": "quality_check", "label": "质量检查", "type": "llm"},
+        {"id": "persist_trip", "label": "保存行程版本", "type": "database"},
         {"id": "format_output", "label": "格式化输出", "type": "output"},
         {"id": "save_summary", "label": "保存摘要", "type": "store"},
     ]
@@ -33,15 +34,17 @@ async def get_topology():
     edges = [
         {"from": "START", "to": "intent_parser"},
         {"from": "intent_parser", "to": "destination_research"},
-        {"from": "destination_research", "to": "plan_generator"},
-        {"from": "plan_generator", "to": "user_select"},
+        {"from": "destination_research", "to": "provider_research"},
+        {"from": "provider_research", "to": "plan_generator"},
+        {"from": "plan_generator", "to": "validate_candidates"},
+        {"from": "validate_candidates", "to": "user_select"},
         {"from": "user_select", "to": "itinerary_refine"},
-        {"from": "itinerary_refine", "to": "budget_calculator"},
+        {"from": "itinerary_refine", "to": "enrich_itinerary"},
+        {"from": "enrich_itinerary", "to": "budget_calculator"},
         {"from": "budget_calculator", "to": "user_approve"},
-        {"from": "user_approve", "to": "format_output", "conditional": True, "label": "approved → 直接输出"},
+        {"from": "user_approve", "to": "persist_trip", "conditional": True, "label": "approved → 保存版本"},
         {"from": "user_approve", "to": "itinerary_refine", "conditional": True, "label": "rejected → 重新细化"},
-        {"from": "quality_check", "to": "itinerary_refine", "conditional": True, "label": "score<7 iter<3"},
-        {"from": "quality_check", "to": "format_output", "conditional": True, "label": "score>=7 or iter>=3"},
+        {"from": "persist_trip", "to": "format_output"},
         {"from": "format_output", "to": "save_summary"},
         {"from": "save_summary", "to": "END"},
     ]

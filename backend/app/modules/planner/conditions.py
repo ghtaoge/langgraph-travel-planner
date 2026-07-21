@@ -32,7 +32,7 @@ def route_after_approve(state: dict) -> str:
     LangGraph 知识点 #5: add_conditional_edges + 用户反馈驱动循环
 
     路由逻辑:
-    - approved → format_output (用户已批准, 信任用户判断, 不再做 quality_check 循环)
+    - approved → persist_trip (先保存不可变业务版本, 再输出)
     - rejected → itinerary_refine (根据 approval_comment 反馈调整行程)
 
     注意: 之前 approved → quality_check 可能得分低 → itinerary_refine → 再次 interrupt
@@ -41,6 +41,6 @@ def route_after_approve(state: dict) -> str:
     approval = state.get("approval_status", "approved")
     logger.info(f"route_after_approve: approval_status={approval}")
     if approval == "approved":
-        return "format_output"
+        return "persist_trip"
     else:
         return "itinerary_refine"

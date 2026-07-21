@@ -95,6 +95,8 @@ CREATE TABLE IF NOT EXISTS trip_revisions (
 
 CREATE INDEX IF NOT EXISTS idx_trips_user_updated
   ON trips(user_id, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trips_user_conversation_unique
+  ON trips(user_id, conversation_id) WHERE conversation_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_trip_revisions_trip_revision
   ON trip_revisions(trip_id, revision DESC);
 

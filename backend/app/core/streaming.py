@@ -15,13 +15,13 @@ import time
 from langgraph.types import Command
 
 from app.core.database import (
-    insert_message,
     append_message_content,
     append_thinking_content,
     finalize_message,
-    update_message_metadata,
+    insert_message,
     update_conversation_status,
     update_conversation_title,
+    update_message_metadata,
 )
 
 logger = logging.getLogger("langgraph-travel-planner.streaming")
@@ -75,13 +75,10 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
         yield json.dumps({"type": "custom", "data": {"status": "恢复执行...", "progress": 0.5}})
 
     # Token 批次写入参数
-    BATCH_SIZE = 50  # 每 50 tokens 写一次
-    FLUSH_INTERVAL = 0.5  # 每 500ms 写一次
+    batch_size = 50  # 每 50 tokens 写一次
+    flush_interval = 0.5  # 每 500ms 写一次
     content_buffer = []
     last_flush_time = time.time()
-
-    # 意图解析结果 (用于标题更新)
-    intent_result = None
 
     try:
         stream = graph.astream(input_data, config=config, stream_mode=["updates", "custom"])
@@ -112,7 +109,10 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
                         })
                         thinking_buffer.append(thinking_content)
                         # 思考 token 也做批次写入
-                        if len(thinking_buffer) >= BATCH_SIZE or (time.time() - last_flush_time) >= FLUSH_INTERVAL:
+                        if (
+                            len(thinking_buffer) >= batch_size
+                            or (time.time() - last_flush_time) >= flush_interval
+                        ):
                             chunk_thinking = "".join(thinking_buffer)
                             await append_thinking_content(pool, assistant_msg_id, chunk_thinking)
                             thinking_buffer.clear()
@@ -138,7 +138,11 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
 
                     if interrupt_payloads:
                         interrupt_value = interrupt_payloads[0]
-                        question_json = json.dumps(interrupt_value, ensure_ascii=False) if isinstance(interrupt_value, dict) else str(interrupt_value)
+                        question_json = (
+                            json.dumps(interrupt_value, ensure_ascii=False)
+                            if isinstance(interrupt_value, dict)
+                            else str(interrupt_value)
+                        )
                         yield json.dumps({"type": "interrupt", "node": node_name, "question": question_json})
                         await update_message_metadata(pool, assistant_msg_id, {
                             "interrupt_type": node_name,
@@ -169,7 +173,11 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
                     if output_summary:
                         yield json.dumps({
                             "type": "custom",
-                            "data": {"status": output_summary, "node": node_name, "progress": _estimate_progress(node_name)},
+                            "data": {
+                                "status": output_summary,
+                                "node": node_name,
+                                "progress": _estimate_progress(node_name),
+                            },
                         })
 
                     yield json.dumps({"type": "node_end", "node": node_name})
@@ -180,8 +188,12 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
         try:
             state = await graph.aget_state(config)
             final_state = state.values
-            yield json.dumps({"type": "completed", "data": {"final_plan": final_state.get("final_plan", "")}})
-        except:
+            yield json.dumps({"type": "completed", "data": {
+                "final_plan": final_state.get("final_plan", ""),
+                "trip_id": final_state.get("trip_id", ""),
+                "trip_revision": final_state.get("trip_revision", 0),
+            }})
+        except Exception:
             yield json.dumps({"type": "completed", "data": {"final_plan": ""}})
         return
 
@@ -201,7 +213,11 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
         for task in state.tasks:
             if task.interrupts:
                 interrupt_value = task.interrupts[0].value
-                question_json = json.dumps(interrupt_value, ensure_ascii=False) if isinstance(interrupt_value, dict) else str(interrupt_value)
+                question_json = (
+                    json.dumps(interrupt_value, ensure_ascii=False)
+                    if isinstance(interrupt_value, dict)
+                    else str(interrupt_value)
+                )
                 yield json.dumps({"type": "interrupt", "node": task.name, "question": question_json})
                 await update_message_metadata(pool, assistant_msg_id, {
                     "interrupt_type": task.name,
@@ -218,7 +234,12 @@ async def stream_graph_execution(graph, input_data: dict | Command, config: dict
     # 从 DB 读取当前累积的 content 作为最终版本
     await finalize_message(pool, assistant_msg_id, final_plan if final_plan else "", None)
     await update_conversation_status(pool, conversation_id, "completed")
-    yield json.dumps({"type": "completed", "data": {"final_plan": final_plan}})
+    yield json.dumps({"type": "completed", "data": {
+        "final_plan": final_plan,
+        "trip_id": final_state.get("trip_id", ""),
+        "trip_revision": final_state.get("trip_revision", 0),
+        "trip": final_state.get("trip_snapshot", {}),
+    }})
 
 
 def _summarize_output(node_name: str, output: dict) -> str:
@@ -235,10 +256,25 @@ def _summarize_output(node_name: str, output: dict) -> str:
         if isinstance(itinerary, dict) and itinerary.get("daily_plans"):
             return f"行程细化: {len(itinerary['daily_plans'])}天安排"
         return "完成行程细化"
+    if node_name == "provider_research":
+        return "完成实时 POI 数据核验"
+    if node_name == "validate_candidates":
+        return "完成候选方案约束检查"
+    if node_name == "enrich_itinerary":
+        return "完成天气、位置与路线校验"
+    if node_name == "persist_trip":
+        return f"行程已保存: {output.get('trip_id', '')}"
     summaries = {
-        "intent_parser": lambda o: f"解析意图: 目标={o.get('destination', '?')}, {o.get('duration', '?')}天, 风格={o.get('travel_style', '?')}",
+        "intent_parser": lambda o: (
+            f"解析意图: 目标={o.get('destination', '?')}, "
+            f"{o.get('duration', '?')}天, 风格={o.get('travel_style', '?')}"
+        ),
         "plan_generator": lambda o: f"生成 {len(o.get('plans', []))} 套旅行方案",
-        "budget_calculator": lambda o: f"计算预算: 约{o.get('budget', {}).get('total_budget', '?')}元" if isinstance(o.get('budget'), dict) else "计算预算...",
+        "budget_calculator": lambda o: (
+            f"计算预算: 约{o.get('budget', {}).get('total_budget', '?')}元"
+            if isinstance(o.get("budget"), dict)
+            else "计算预算..."
+        ),
         "quality_check": lambda o: f"质量评分: {o.get('quality_score', '?')}分",
         "format_output": lambda o: "格式化最终行程...",
         "save_summary": lambda o: "保存对话摘要",
@@ -249,7 +285,7 @@ def _summarize_output(node_name: str, output: dict) -> str:
     if fn:
         try:
             return fn(output)
-        except:
+        except Exception:
             return ""
     return ""
 
@@ -259,12 +295,15 @@ def _estimate_progress(node_name: str) -> float:
     progress_map = {
         "intent_parser": 0.1,
         "destination_research": 0.2,
-        "plan_generator": 0.3,
-        "user_select": 0.35,
-        "itinerary_refine": 0.5,
-        "budget_calculator": 0.6,
-        "user_approve": 0.7,
-        "quality_check": 0.8,
+        "provider_research": 0.25,
+        "plan_generator": 0.32,
+        "validate_candidates": 0.38,
+        "user_select": 0.42,
+        "itinerary_refine": 0.55,
+        "enrich_itinerary": 0.68,
+        "budget_calculator": 0.75,
+        "user_approve": 0.82,
+        "persist_trip": 0.88,
         "format_output": 0.9,
         "save_summary": 0.95,
     }

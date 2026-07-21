@@ -2,7 +2,7 @@
 
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
@@ -59,10 +59,31 @@ class Activity(BaseModel):
         return self
 
 
+class WeatherSummary(BaseModel):
+    day_weather: str
+    night_weather: str = ""
+    day_temp_c: Optional[float] = None
+    night_temp_c: Optional[float] = None
+    source: DataSource
+
+
+class TransportLeg(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    from_activity_id: str
+    to_activity_id: str
+    mode: Literal["walking", "driving"]
+    distance_m: int = Field(ge=0)
+    duration_s: int = Field(ge=0)
+    polyline: list[Location] = Field(default_factory=list)
+    source: DataSource
+
+
 class TripDay(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     date: date
     activities: list[Activity] = Field(default_factory=list)
+    weather: Optional[WeatherSummary] = None
+    transport_legs: list[TransportLeg] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_schedule(self):
@@ -73,6 +94,10 @@ class TripDay(BaseModel):
         for previous, current in zip(self.activities, self.activities[1:]):
             if current.starts_at < previous.ends_at:
                 raise ValueError("activities overlap")
+        activity_ids = {item.id for item in self.activities}
+        for leg in self.transport_legs:
+            if leg.from_activity_id not in activity_ids or leg.to_activity_id not in activity_ids:
+                raise ValueError("transport leg references unknown activity")
         return self
 
 

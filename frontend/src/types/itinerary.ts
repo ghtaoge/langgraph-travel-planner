@@ -21,6 +21,18 @@ export interface Plan {
   highlights: string[]
   daily_overview: string[]
   estimated_budget: string
+  metrics?: {
+    day_count: number
+    highlight_count: number
+    available_poi_count: number
+    data_provider: string
+    estimated_data: boolean
+    stale_data: boolean
+  }
+  validation?: {
+    valid: boolean
+    warnings: string[]
+  }
 }
 
 export interface DailyPlan {
@@ -46,6 +58,9 @@ export interface IntentResult {
   travel_style: string
   budget_level: string
   special_requests: string[]
+  start_date: string | null
+  party_size: number
+  budget_limit: number | null
 }
 
 export interface BudgetResult {

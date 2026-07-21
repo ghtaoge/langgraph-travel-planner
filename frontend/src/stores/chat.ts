@@ -25,6 +25,9 @@ interface ThreadState {
   isLoading: boolean
   currentNode: string
   activeNodes: Set<string>
+  tripId: string
+  tripRevision: number
+  trip: Record<string, unknown> | null
 }
 
 function createThreadState(): ThreadState {
@@ -37,6 +40,9 @@ function createThreadState(): ThreadState {
     isLoading: false,
     currentNode: '',
     activeNodes: new Set(),
+    tripId: '',
+    tripRevision: 0,
+    trip: null,
   }
 }
 
@@ -103,6 +109,9 @@ export const useChatStore = defineStore('chat', () => {
   const hasInterrupt = computed(() => interruptInfo.value !== null)
   const interruptNode = computed(() => interruptInfo.value?.node || '')
   const interruptQuestion = computed(() => interruptInfo.value?.question || '')
+  const tripId = computed(() => currentThread.value?.tripId || '')
+  const tripRevision = computed(() => currentThread.value?.tripRevision || 0)
+  const trip = computed(() => currentThread.value?.trip || null)
 
   // ── Thread state helpers ──
 
@@ -371,6 +380,9 @@ export const useChatStore = defineStore('chat', () => {
         state.isLoading = false
         state.activeNodes.clear()
         state.currentNode = ''
+        state.tripId = event.data?.trip_id || ''
+        state.tripRevision = event.data?.trip_revision || 0
+        state.trip = event.data?.trip || null
         break
 
       case 'graph_topology':
@@ -435,6 +447,9 @@ export const useChatStore = defineStore('chat', () => {
         state.streamingMessageId = null
         state.activeNodes.clear()
         state.currentNode = ''
+        state.tripId = ''
+        state.tripRevision = 0
+        state.trip = null
       }
     }
     threadId.value = ''
@@ -447,6 +462,7 @@ export const useChatStore = defineStore('chat', () => {
     messages, isLoading, interruptInfo, plans, approveData,
     currentNode, activeNodes,
     hasInterrupt, interruptNode, interruptQuestion,
+    tripId, tripRevision, trip,
     sendMessage, sendResume, rollback,
     handleSSEEvent, setThreadId, clearChat, initSSE,
     hasMessagesForThread, getLastAssistantMetadata,

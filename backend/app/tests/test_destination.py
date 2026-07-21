@@ -1,4 +1,4 @@
-"""目的地研究子图测试 — Send fan-out, Command.PARENT, merge_dicts reducer"""
+"""目的地研究子图测试 — 顺序研究、Command.PARENT、reducer。"""
 
 from app.modules.destination.graph import build_destination_graph
 
@@ -13,8 +13,7 @@ def test_destination_graph_nodes_registered():
     """DestinationSubgraph 包含所有预期节点"""
     graph = build_destination_graph()
     node_names = set(graph.nodes.keys()) - {"__start__", "__end__"}
-    assert "city_research_fanout" in node_names
-    assert "city_research_node" in node_names
+    assert "city_research" in node_names
     assert "synthesize_findings" in node_names
 
 

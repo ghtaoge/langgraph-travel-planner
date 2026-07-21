@@ -10,7 +10,12 @@ from langgraph.types import Command
 
 from app.api.schemas import ResumeRequest, RollbackRequest, TravelStreamRequest
 from app.core.auth import get_current_user
-from app.core.database import get_db_pool, create_conversation, insert_message, update_conversation_status, update_conversation_title, get_conversation_status
+from app.core.database import (
+    create_conversation,
+    get_conversation_status,
+    get_db_pool,
+    insert_message,
+)
 from app.core.streaming import stream_graph_execution
 from app.modules.planner.graph import build_travel_planner_graph
 
@@ -63,9 +68,13 @@ async def travel_stream(
         "messages": [HumanMessage(content=request.query)],
         "plans": [],
         "research_result": {},
+        "provider_warnings": [],
         "iteration": 0,
         "quality_score": 0,
         "summary_saved": False,
+        "trip_id": "",
+        "trip_revision": 0,
+        "trip_snapshot": {},
     }
 
     async def event_generator():
@@ -91,7 +100,8 @@ async def travel_resume(
     pool = await get_db_pool()
 
     # 写入 resume 操作消息到 DB
-    await insert_message(pool, request.thread_id, "system", f"恢复操作: {json.dumps(request.resume_data, ensure_ascii=False)[:200]}")
+    resume_summary = json.dumps(request.resume_data, ensure_ascii=False)[:200]
+    await insert_message(pool, request.thread_id, "system", f"恢复操作: {resume_summary}")
 
     config = {"configurable": {"thread_id": request.thread_id}}
     resume_command = Command(resume=request.resume_data)

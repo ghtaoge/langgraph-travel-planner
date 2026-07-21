@@ -103,6 +103,14 @@ class TripRepository:
         )
         return [_load_snapshot(row["snapshot"]) for row in rows]
 
+    async def find_by_conversation(self, user_id: str, conversation_id: str) -> Trip | None:
+        row = await self.pool.fetchrow(
+            "SELECT snapshot FROM trips WHERE user_id = $1 AND conversation_id = $2",
+            UUID(user_id),
+            UUID(conversation_id),
+        )
+        return _load_snapshot(row["snapshot"]) if row else None
+
     async def apply_patch(self, user_id: str, trip_id: str, patch: TripPatch) -> Trip:
         async with self.pool.acquire() as connection, connection.transaction():
             row = await connection.fetchrow(

@@ -11,6 +11,7 @@ def test_trip_schema_contains_revision_contract():
     assert "snapshot JSONB NOT NULL" in sql
     assert "CREATE TABLE IF NOT EXISTS trip_revisions" in sql
     assert "UNIQUE (trip_id, revision)" in sql
+    assert "idx_trips_user_conversation_unique" in sql
 
 
 def test_schema_contains_provider_cache_contract():

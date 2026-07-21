@@ -2,13 +2,12 @@
 
 from langgraph.store.memory import InMemoryStore
 
-from app.core.store import get_store
 
+def test_production_store_factory_is_importable_without_connecting():
+    """导入生产 Store 工厂时不建立数据库连接。"""
+    from app.core.store import get_store
 
-def test_in_memory_store_created():
-    """InMemoryStore 实例正确创建"""
-    store = get_store()
-    assert isinstance(store, InMemoryStore)
+    assert callable(get_store)
 
 
 def test_store_put_and_get():

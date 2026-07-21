@@ -59,6 +59,9 @@ export interface CompletedEvent {
   type: 'completed'
   data: {
     final_plan: string
+    trip_id?: string
+    trip_revision?: number
+    trip?: Record<string, unknown>
   }
 }
 
@@ -84,7 +87,7 @@ export interface GraphTopologyEvent {
 export interface TopologyNode {
   id: string
   label: string
-  type: 'llm' | 'subgraph' | 'send' | 'interrupt' | 'output' | 'store' | 'command' | 'react_agent'
+  type: 'llm' | 'subgraph' | 'send' | 'interrupt' | 'output' | 'store' | 'command' | 'react_agent' | 'provider' | 'validator' | 'database'
 }
 
 export interface TopologyEdge {

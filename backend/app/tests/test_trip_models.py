@@ -5,7 +5,16 @@ from datetime import date, datetime
 import pytest
 from pydantic import ValidationError
 
-from app.modules.trips.models import Activity, ActivityStatus, Location, TripDay, TripDraft
+from app.modules.trips.models import (
+    Activity,
+    ActivityStatus,
+    DataSource,
+    Location,
+    TransportLeg,
+    TripDay,
+    TripDraft,
+    WeatherSummary,
+)
 
 
 def activity(name: str, start: int, end: int) -> Activity:
@@ -83,3 +92,40 @@ def test_activity_defaults_to_planned_and_unlocked():
 
     assert item.status is ActivityStatus.PLANNED
     assert item.locked is False
+
+
+def test_trip_day_keeps_weather_routes_and_source_metadata():
+    source = DataSource(
+        provider="amap",
+        fetched_at=datetime(2026, 7, 22),
+        confidence=1,
+    )
+    day = TripDay(
+        id="day-1",
+        date=date(2026, 8, 1),
+        activities=[activity("A", 9, 10), activity("B", 11, 12)],
+        weather=WeatherSummary(
+            day_weather="多云",
+            night_weather="阵雨",
+            day_temp_c=30,
+            night_temp_c=23,
+            source=source,
+        ),
+        transport_legs=[
+            TransportLeg(
+                from_activity_id="a",
+                to_activity_id="b",
+                mode="walking",
+                distance_m=1200,
+                duration_s=900,
+                polyline=[
+                    Location(lat=30.57, lng=104.06),
+                    Location(lat=30.58, lng=104.07),
+                ],
+                source=source,
+            )
+        ],
+    )
+
+    assert day.weather.source.provider == "amap"
+    assert day.transport_legs[0].duration_s == 900

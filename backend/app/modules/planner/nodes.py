@@ -7,17 +7,20 @@ from datetime import date
 from langchain_core.messages import HumanMessage
 from langgraph.config import get_stream_writer
 from langgraph.store.base import BaseStore
-from langgraph.types import Command, interrupt
+from langgraph.types import interrupt
+from pydantic import ValidationError
 
 from app.config.prompts import (
     BUDGET_CALC_PROMPT,
     INTENT_PARSE_PROMPT,
-    QUALITY_CHECK_PROMPT,
     PLAN_GENERATE_PROMPT,
+    QUALITY_CHECK_PROMPT,
 )
 from app.config.settings import settings
 from app.core.llm import get_llm
 from app.modules.planner.state import BudgetResult, IntentResult, Plan, TravelState
+from app.modules.planner.trip_mapper import build_trip_draft
+from app.modules.trips.repository import TripRepository
 
 logger = logging.getLogger("langgraph-travel-planner.planner")
 
@@ -146,7 +149,7 @@ def intent_parser_node(state: TravelState, store: BaseStore) -> dict:
         # 清理键名中多余的引号
         result_dict = {k.strip('"'): v for k, v in result_dict.items()}
         result = IntentResult(**result_dict)
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
+    except (json.JSONDecodeError, KeyError, TypeError, ValidationError) as e:
         logger.warning(f"Intent parse failed: {e}, content: {content[:200]}")
         result = IntentResult(
             destination="成都",
@@ -163,10 +166,12 @@ def intent_parser_node(state: TravelState, store: BaseStore) -> dict:
 
     writer({"status": "意图解析完成", "progress": 0.2})
     return {
-        "intent": result.model_dump(),
+        "intent": result.model_dump(mode="json"),
         "destination": result.destination,
         "duration": result.duration,
         "travel_style": result.travel_style,
+        "start_date": result.start_date,
+        "party_size": result.party_size,
     }
 
 
@@ -181,7 +186,14 @@ def plan_generator_node(state: TravelState) -> dict:
     research = state.get("research_result", {})
     research_summary = ""
     if isinstance(research, dict):
-        research_summary = str(research.get("_summary", ""))[:500]
+        provider_pois = ((research.get("_provider") or {}).get("pois") or [])[:10]
+        provider_summary = ", ".join(
+            item.get("name", "") for item in provider_pois if isinstance(item, dict)
+        )
+        research_summary = (
+            f"{str(research.get('_summary', ''))[:350]}\n"
+            f"Provider核验POI: {provider_summary}"
+        )[:500]
 
     llm = get_llm()
     all_plans = []
@@ -276,6 +288,7 @@ def user_approve_node(state: TravelState) -> dict:
         "itinerary": state.get("itinerary", {}),
         "budget": state.get("budget", {}),
         "daily_plans": (state.get("itinerary", {}) or {}).get("daily_plans", []),
+        "provider_warnings": state.get("provider_warnings", []),
         "interrupt_type": "approve",
     })
 
@@ -285,6 +298,29 @@ def user_approve_node(state: TravelState) -> dict:
     return {
         "approval_status": decision.get("approval_status", "approved"),
         "approval_comment": decision.get("approval_comment", decision.get("comment", "")),
+    }
+
+
+async def persist_trip_node(state: TravelState) -> dict:
+    """Persist the first user-approved itinerary as the durable Trip aggregate."""
+    if state.get("approval_status") != "approved":
+        raise ValueError("only an approved itinerary can be persisted")
+    if _db_pool is None:
+        raise RuntimeError("database pool is not initialized")
+
+    user_id = state["user_id"]
+    thread_id = state["thread_id"]
+    repository = TripRepository(_db_pool)
+    existing = await repository.find_by_conversation(user_id, thread_id)
+    trip = existing or await repository.create(
+        user_id,
+        build_trip_draft(state),
+        conversation_id=thread_id,
+    )
+    return {
+        "trip_id": trip.id,
+        "trip_revision": trip.current_revision,
+        "trip_snapshot": trip.model_dump(mode="json"),
     }
 
 
@@ -331,9 +367,12 @@ def format_output_node(state: TravelState) -> dict:
         for act in activities:
             lines.append(f"  - {act.get('name', '景点')}: {act.get('description', '')}")
 
-    lines.append(f"\n💡 小贴士:")
+    lines.append("\n💡 小贴士:")
     for tip in itinerary.get("tips", ["提前预订门票", "注意天气变化"]):
         lines.append(f"  - {tip}")
+
+    if state.get("trip_id"):
+        lines.append(f"\n行程已保存: {state['trip_id']} (版本 {state.get('trip_revision', 1)})")
 
     return {"final_plan": "\n".join(lines)}
 
@@ -352,7 +391,10 @@ def save_summary_node(state: TravelState, store: BaseStore) -> dict:
     selected_plan = state.get("selected_plan", {})
     budget = state.get("budget", {})
 
-    summary_text = f"{destination} {duration}天旅行, 选择了{selected_plan.get('title', '')}, 预算约{budget.get('total_budget', 0)}元"
+    summary_text = (
+        f"{destination} {duration}天旅行, 选择了{selected_plan.get('title', '')}, "
+        f"预算约{budget.get('total_budget', 0)}元"
+    )
 
     # 写入对话摘要
     store.put(

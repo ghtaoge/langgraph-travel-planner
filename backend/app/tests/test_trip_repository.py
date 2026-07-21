@@ -173,6 +173,20 @@ async def test_get_never_returns_another_users_trip():
 
 
 @pytest.mark.asyncio
+async def test_find_by_conversation_supports_idempotent_graph_retries():
+    pool = FakePool()
+    pool.fetchrow.return_value = {"snapshot": _json(persisted_trip())}
+    repository = TripRepository(pool)
+
+    found = await repository.find_by_conversation(
+        USER_ID,
+        "00000000-0000-0000-0000-000000000004",
+    )
+
+    assert found.id == TRIP_ID
+
+
+@pytest.mark.asyncio
 async def test_restore_creates_new_revision_without_deleting_history():
     connection = FakeConnection()
     connection.fetchrow.side_effect = [

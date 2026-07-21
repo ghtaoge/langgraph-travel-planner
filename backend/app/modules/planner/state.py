@@ -2,6 +2,7 @@
 
 import operator
 from dataclasses import dataclass
+from datetime import date
 from typing import Annotated, Optional, TypedDict
 
 from langchain_core.messages import BaseMessage
@@ -26,6 +27,9 @@ class IntentResult(BaseModel):
     travel_style: str = Field(description="旅行风格: 文化游/美食游/自然游/混合")
     budget_level: str = Field(description="预算水平: 经济/中等/高端")
     special_requests: list[str] = Field(default_factory=list, description="特殊需求")
+    start_date: Optional[date] = Field(default=None, description="出发日期，未提供时为空")
+    party_size: int = Field(default=1, ge=1, le=50, description="出行人数")
+    budget_limit: Optional[float] = Field(default=None, ge=0, description="明确预算上限")
 
 
 class BudgetResult(BaseModel):
@@ -112,9 +116,12 @@ class TravelState(TypedDict):
     destination: str
     duration: int
     travel_style: str
+    start_date: Optional[date]
+    party_size: int
 
     # ── 调研 ──
     research_result: Annotated[dict, merge_dicts]
+    provider_warnings: list[str]
 
     # ── 方案 ──
     plans: list[dict]
@@ -139,6 +146,9 @@ class TravelState(TypedDict):
     # ── 输出 ──
     final_plan: str
     summary_saved: bool
+    trip_id: str
+    trip_revision: int
+    trip_snapshot: dict
 
     # ── 错误 ──
     error: Optional[str]

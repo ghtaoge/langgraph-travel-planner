@@ -30,6 +30,19 @@ const dailyPlans = computed(() => {
   return []
 })
 
+const providerWarnings = computed(() => {
+  const warnings = chatStore.approveData?.provider_warnings
+  return Array.isArray(warnings) ? warnings.map(String) : []
+})
+
+function routeSummary(day: any): string {
+  const legs = Array.isArray(day.route_legs) ? day.route_legs : []
+  const distance = legs.reduce((total: number, leg: any) => total + Number(leg.distance_m || 0), 0)
+  const duration = legs.reduce((total: number, leg: any) => total + Number(leg.duration_s || 0), 0)
+  if (!legs.length) return ''
+  return `步行 ${(distance / 1000).toFixed(1)}km · ${Math.round(duration / 60)}分钟`
+}
+
 function approve() { chatStore.sendResume({ approval_status: 'approved', approval_comment: '' }) }
 function reject() {
   chatStore.sendResume({ approval_status: 'rejected', approval_comment: commentInput.value || '需要调整' })
@@ -78,6 +91,10 @@ function reject() {
 
         <!-- 住宿 / 餐饮 / 交通 -->
         <div class="day-info-tags">
+          <span v-if="day.weather" class="info-tag tag-weather">
+            {{ day.weather.day_weather }} {{ day.weather.day_temp_c ?? '' }}°C
+          </span>
+          <span v-if="routeSummary(day)" class="info-tag tag-route">{{ routeSummary(day) }}</span>
           <span v-if="day.hotel_name" class="info-tag tag-hotel">🏨 {{ day.hotel_name }}</span>
           <span v-if="day.restaurant_names && day.restaurant_names.length > 0" class="info-tag tag-food">🍜 {{ day.restaurant_names.join('、') }}</span>
           <span v-if="day.transport" class="info-tag tag-trans">🚗 {{ day.transport }}</span>
@@ -118,6 +135,10 @@ function reject() {
     <!-- 提示 -->
     <div v-if="itinerary && itinerary.tips && itinerary.tips.length > 0" class="tips-row">
       <span v-for="tip in itinerary.tips" :key="tip" class="tip-chip">💡 {{ tip }}</span>
+    </div>
+
+    <div v-if="providerWarnings.length" class="provider-warnings">
+      <div v-for="warning in providerWarnings" :key="warning" class="warning-row">{{ warning }}</div>
     </div>
 
     <!-- 操作按钮 -->
@@ -198,6 +219,8 @@ function reject() {
 .tag-hotel { background: rgba(99,102,241,0.12); color: #6366f1; }
 .tag-food { background: rgba(245,158,11,0.12); color: #f59e0b; }
 .tag-trans { background: rgba(34,197,94,0.12); color: #22c55e; }
+.tag-weather { background: rgba(14,165,233,0.12); color: #0284c7; }
+.tag-route { background: rgba(20,184,166,0.12); color: #0f766e; }
 
 /* ── 预算卡片 ── */
 .budget-card {
@@ -225,6 +248,14 @@ function reject() {
 /* ── 提示 ── */
 .tips-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
 .tip-chip { font-size: 12px; color: var(--text-tertiary); background: var(--bg-tertiary); padding: 4px 10px; border-radius: 6px; }
+
+.provider-warnings {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-left: 3px solid #f59e0b;
+  background: rgba(245,158,11,0.1);
+}
+.warning-row { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
 
 /* ── 操作 ── */
 .action-bar {
