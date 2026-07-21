@@ -222,6 +222,19 @@ npm run dev
 | `/api/travel/history` | GET | 对话历史列表 | ✅ |
 | `/api/travel/profile` | GET | 用户旅行画像 | ✅ |
 
+### 行程管理 API
+
+| 路径 | 方法 | 说明 | 认证 |
+|---|---|---|---|
+| `/api/trips` | POST | 创建持久化 Trip 和初始版本 | ✅ |
+| `/api/trips` | GET | 获取当前用户的 Trip 列表 | ✅ |
+| `/api/trips/{trip_id}` | GET | 获取 Trip 当前快照 | ✅ |
+| `/api/trips/{trip_id}/revisions` | POST | 基于当前版本应用结构化补丁 | ✅ |
+| `/api/trips/{trip_id}/revisions` | GET | 获取不可变版本历史 | ✅ |
+| `/api/trips/{trip_id}/revisions/{revision}/restore` | POST | 将历史快照恢复为新版本 | ✅ |
+
+补丁请求必须包含 `base_revision`。版本不一致返回 HTTP 409；锁定、已完成或已跳过的活动被修改时返回 HTTP 422。恢复历史版本不会删除后续记录，而是创建一个新的当前版本。
+
 ### SSE 事件协议
 
 所有 SSE 事件格式为 `data: {JSON}\n\n`：
