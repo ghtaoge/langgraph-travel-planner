@@ -14,6 +14,7 @@ from app.api.routes import auth, conversations, history, travel, topology, trips
 from app.core.checkpoint import init_checkpointer, close_checkpointer
 from app.core.database import get_db_pool, close_db_pool, init_schema
 from app.core.store import init_store, close_store
+from app.modules.providers.factory import close_travel_data_service, init_travel_data_service
 
 
 @asynccontextmanager
@@ -28,20 +29,24 @@ async def lifespan(app: FastAPI):
     # 3. 初始化 LangGraph checkpointer (AsyncPostgresSaver)
     await init_checkpointer()
 
-    # 4. 初始化 LangGraph store (PostgresStore)
+    # 4. 初始化实时旅行数据 Provider + PostgreSQL 缓存
+    await init_travel_data_service(pool)
+
+    # 5. 初始化 LangGraph store (PostgresStore)
     init_store()
 
-    # 5. 预构建主图 (compile with PG checkpointer + store)
+    # 6. 预构建主图 (compile with PG checkpointer + store)
     from app.modules.planner.graph import build_travel_planner_graph
     await build_travel_planner_graph()
 
-    # 6. 设置 nodes 的 DB pool 引用
+    # 7. 设置 nodes 的 DB pool 引用
     from app.modules.planner.nodes import set_db_pool
     set_db_pool(pool)
 
     yield
 
     # Shutdown: 清理连接池 + checkpointer + store
+    await close_travel_data_service()
     await close_db_pool()
     await close_checkpointer()
     close_store()

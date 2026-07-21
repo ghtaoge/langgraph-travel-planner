@@ -97,3 +97,19 @@ CREATE INDEX IF NOT EXISTS idx_trips_user_updated
   ON trips(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_trip_revisions_trip_revision
   ON trip_revisions(trip_id, revision DESC);
+
+-- Cache both fresh and expired provider responses. Expired rows support
+-- explicit stale-data fallback when an external service is unavailable.
+CREATE TABLE IF NOT EXISTS provider_cache (
+  cache_key VARCHAR(160) PRIMARY KEY,
+  provider VARCHAR(40) NOT NULL,
+  data_type VARCHAR(40) NOT NULL,
+  payload JSONB NOT NULL,
+  fetched_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_cache_expiry
+  ON provider_cache(data_type, expires_at);
