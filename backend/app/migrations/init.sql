@@ -64,3 +64,36 @@ CREATE TABLE IF NOT EXISTS verification_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_verification_codes_lookup
   ON verification_codes(target_type, target, purpose, created_at DESC);
+
+-- Durable Trip aggregate. The JSONB snapshot is confirmed business state;
+-- LangGraph checkpoints remain workflow execution state only.
+CREATE TABLE IF NOT EXISTS trips (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  title VARCHAR(200) NOT NULL,
+  destination VARCHAR(100) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  current_revision INTEGER NOT NULL CHECK (current_revision >= 1),
+  snapshot JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS trip_revisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  trip_id UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  base_revision INTEGER NOT NULL CHECK (base_revision >= 0),
+  reason VARCHAR(500) NOT NULL,
+  patch JSONB NOT NULL,
+  snapshot JSONB NOT NULL,
+  created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (trip_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trips_user_updated
+  ON trips(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trip_revisions_trip_revision
+  ON trip_revisions(trip_id, revision DESC);
